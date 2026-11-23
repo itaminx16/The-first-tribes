@@ -198,6 +198,19 @@ export class GameScene extends Phaser.Scene {
   private camStartY = 0;
   private uiClickGuardUntil = 0;
 
+  // Android Multi-Touch, Pinch-to-Zoom & Touch Build Preview State
+  private isPinching = false;
+  private pinchPrevDist = 0;
+  private pinchPrevMidX = 0;
+  private pinchPrevMidY = 0;
+  private pinchEndGuardUntil = 0;
+  private touchMarqueeMode = false;
+  private buildGhostWorldX = 0;
+  private buildGhostWorldY = 0;
+  private isTouchBuildPreview = false;
+  private lastBuildPreviewValid: boolean | null = null;
+  private lastBuildPreviewCanAfford: boolean | null = null;
+
   constructor() {
     super({ key: 'GameScene' });
   }
@@ -218,6 +231,9 @@ export class GameScene extends Phaser.Scene {
     this.input.mouse?.disableContextMenu();
     this.cameras.main.setBounds(0, 0, this.worldWidth, this.worldHeight);
     this.cameras.main.centerOn(this.playerBaseX, this.playerBaseY);
+    if (Math.min(this.scale.width, this.scale.height) < 520) {
+      this.cameras.main.setZoom(0.78);
+    }
 
     this.createTerrain();
     this.river = new River(this, this.worldWidth, this.worldHeight, preset.riverLayout, this.season);
@@ -318,6 +334,14 @@ export class GameScene extends Phaser.Scene {
     this.predatorCounter = 0;
     this.isBuildMode = false;
     this.buildType = null;
+    this.isPinching = false;
+    this.isPanning = false;
+    this.panMoved = false;
+    this.pinchEndGuardUntil = 0;
+    this.touchMarqueeMode = false;
+    this.isTouchBuildPreview = false;
+    this.lastBuildPreviewValid = null;
+    this.lastBuildPreviewCanAfford = null;
   }
 
   private bindUiSceneEvents(): void {
@@ -478,6 +502,25 @@ export class GameScene extends Phaser.Scene {
     uiScene.events.on('close-building-panel', () => {
       this.selectBuilding(null);
     });
+    uiScene.events.on('camera-zoom', (delta: number) => {
+      const cam = this.cameras.main;
+      cam.setZoom(Phaser.Math.Clamp(cam.zoom + delta, 0.42, 1.55));
+    });
+    uiScene.events.on('camera-home', () => {
+      this.cameras.main.pan(this.playerBaseX, this.playerBaseY, 320, 'Sine.easeOut');
+    });
+    uiScene.events.on('toggle-marquee-mode', () => {
+      this.touchMarqueeMode = !this.touchMarqueeMode;
+      this.events.emit('marquee-mode-updated', this.touchMarqueeMode);
+    });
+    uiScene.events.on('confirm-build-placement', () => {
+      if (this.isBuildMode && this.buildType) {
+        this.tryPlaceBuildingAt(this.buildGhostWorldX, this.buildGhostWorldY);
+      }
+    });
+    uiScene.events.on('cancel-build-mode', () => {
+      this.setBuildMode(null);
+    });
     uiScene.events.on('ui-ready', () => {
       this.emitAllHudState();
     });
@@ -496,6 +539,7 @@ export class GameScene extends Phaser.Scene {
     this.emitRoster();
     this.events.emit('config-updated', { ...this.gameConfig });
     this.events.emit('build-mode-updated', this.buildType);
+    this.events.emit('marquee-mode-updated', this.touchMarqueeMode);
     this.events.emit('chronicle-updated', [...this.ancestors]);
     this.events.emit('saves-list-updated', getAllSaveSummaries());
     if (!GameScene.hasStartedFromMenu) {
@@ -815,7 +859,11 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (this.isBuildMode) {
-      this.updateBuildGhostAtPointer(this.input.activePointer);
+      if (this.isTouchBuildPreview) {
+        this.updateBuildGhostAtWorld(this.buildGhostWorldX, this.buildGhostWorldY);
+      } else {
+        this.updateBuildGhostAtPointer(this.input.activePointer);
+      }
     }
 
     this.checkTribeBreeding(simDelta);
@@ -1288,13 +1336,27 @@ export class GameScene extends Phaser.Scene {
   private setBuildMode(type: BuildingType | null): void {
     this.buildType = type;
     this.isBuildMode = type !== null;
+    this.lastBuildPreviewValid = null;
+    this.lastBuildPreviewCanAfford = null;
+
     if (this.buildGhost && this.buildGhostRing) {
       if (type) {
         this.buildGhost.setTexture(this.getGhostTextureKey(type));
         this.buildGhost.setVisible(true);
         this.buildGhostRing.setVisible(true);
-        this.updateBuildGhostAtPointer(this.input.activePointer);
+
+        const isTouchMode =
+          this.sys.game.device.input.touch || this.input.activePointer.wasTouch;
+        if (isTouchMode) {
+          this.isTouchBuildPreview = true;
+          const cam = this.cameras.main;
+          this.updateBuildGhostAtWorld(cam.midPoint.x, cam.midPoint.y);
+        } else {
+          this.isTouchBuildPreview = false;
+          this.updateBuildGhostAtPointer(this.input.activePointer);
+        }
       } else {
+        this.isTouchBuildPreview = false;
         this.buildGhost.setVisible(false);
         this.buildGhostRing.setVisible(false);
       }
@@ -1326,16 +1388,21 @@ export class GameScene extends Phaser.Scene {
   }
 
   private updateBuildGhostAtPointer(pointer: Phaser.Input.Pointer): void {
-    if (!this.buildGhost || !this.buildGhostRing || !this.buildType) return;
+    if (!this.buildType) return;
     const worldPt = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
-    const wx = worldPt.x;
-    const wy = worldPt.y;
+    this.updateBuildGhostAtWorld(worldPt.x, worldPt.y);
+  }
+
+  private updateBuildGhostAtWorld(wx: number, wy: number): void {
+    if (!this.buildGhost || !this.buildGhostRing || !this.buildType) return;
+    this.buildGhostWorldX = wx;
+    this.buildGhostWorldY = wy;
 
     this.buildGhost.setPosition(wx, wy);
     this.buildGhostRing.setPosition(wx, wy + 4);
 
-    const valid =
-      this.canAffordBuilding(this.buildType) && this.canPlaceBuildingAt(wx, wy, this.buildType);
+    const canAfford = this.canAffordBuilding(this.buildType);
+    const valid = canAfford && this.canPlaceBuildingAt(wx, wy, this.buildType);
 
     if (valid) {
       this.buildGhost.setTint(0xa7f3d0);
@@ -1345,6 +1412,15 @@ export class GameScene extends Phaser.Scene {
       this.buildGhost.setTint(0xfca5a5);
       this.buildGhostRing.setFillStyle(0xef4444, 0.25);
       this.buildGhostRing.setStrokeStyle(2.5, 0xef4444, 0.95);
+    }
+
+    if (
+      valid !== this.lastBuildPreviewValid ||
+      canAfford !== this.lastBuildPreviewCanAfford
+    ) {
+      this.lastBuildPreviewValid = valid;
+      this.lastBuildPreviewCanAfford = canAfford;
+      this.events.emit('build-preview-status', { valid, canAfford });
     }
   }
 
@@ -2237,16 +2313,6 @@ export class GameScene extends Phaser.Scene {
     const cy = this.playerBaseY;
     this.campfire = new Campfire(this, cx, cy);
     this.campfire.setSize(108, 108);
-    this.campfire.setInteractive(
-      new Phaser.Geom.Circle(0, -10, 54),
-      Phaser.Geom.Circle.Contains
-    );
-    this.campfire.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-      if (pointer.leftButtonDown() && !this.isBuildMode) {
-        this.uiClickGuardUntil = this.time.now + 150;
-        this.events.emit('campfire-clicked');
-      }
-    });
 
     const spots: Record<ResourceType, { x: number; y: number }> = {
       wood: { x: cx - 134, y: cy - 44 },
@@ -2942,13 +3008,28 @@ export class GameScene extends Phaser.Scene {
 
     this.input.on('wheel', (_p: Phaser.Input.Pointer, _objs: unknown[], _dx: number, dy: number) => {
       const cam = this.cameras.main;
-      const nextZoom = Phaser.Math.Clamp(cam.zoom - dy * 0.0008, 0.45, 1.45);
+      const nextZoom = Phaser.Math.Clamp(cam.zoom - dy * 0.0008, 0.42, 1.55);
       cam.setZoom(nextZoom);
     });
 
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      if (this.isMenuPaused) return;
       SoundFX.unlock();
       if (this.time.now < this.uiClickGuardUntil) return;
+
+      if (this.input.pointer1.isDown && this.input.pointer2.isDown) {
+        const p1 = this.input.pointer1;
+        const p2 = this.input.pointer2;
+        this.isPinching = true;
+        this.isPanning = false;
+        this.isMarqueeSelecting = false;
+        this.panMoved = true;
+        this.marqueeGfx.clear();
+        this.pinchPrevDist = Phaser.Math.Distance.Between(p1.x, p1.y, p2.x, p2.y);
+        this.pinchPrevMidX = (p1.x + p2.x) * 0.5;
+        this.pinchPrevMidY = (p1.y + p2.y) * 0.5;
+        return;
+      }
 
       this.panMoved = false;
       this.panStartX = pointer.x;
@@ -2956,7 +3037,11 @@ export class GameScene extends Phaser.Scene {
       this.camStartX = this.cameras.main.scrollX;
       this.camStartY = this.cameras.main.scrollY;
 
-      if (pointer.wasTouch || pointer.middleButtonDown() || pointer.rightButtonDown()) {
+      if (pointer.wasTouch && this.touchMarqueeMode && !this.isBuildMode) {
+        this.isMarqueeSelecting = true;
+        this.marqueeStartX = pointer.worldX;
+        this.marqueeStartY = pointer.worldY;
+      } else if (pointer.wasTouch || pointer.middleButtonDown() || pointer.rightButtonDown()) {
         this.isPanning = true;
       } else if (pointer.leftButtonDown() && !this.isBuildMode) {
         this.isMarqueeSelecting = true;
@@ -2966,11 +3051,37 @@ export class GameScene extends Phaser.Scene {
     });
 
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
-      if (this.isBuildMode) {
+      if (this.isMenuPaused) return;
+
+      if (this.isPinching && this.input.pointer1.isDown && this.input.pointer2.isDown) {
+        const p1 = this.input.pointer1;
+        const p2 = this.input.pointer2;
+        const dist = Phaser.Math.Distance.Between(p1.x, p1.y, p2.x, p2.y);
+        const midX = (p1.x + p2.x) * 0.5;
+        const midY = (p1.y + p2.y) * 0.5;
+        if (this.pinchPrevDist > 12 && dist > 12) {
+          const cam = this.cameras.main;
+          const factor = dist / this.pinchPrevDist;
+          const nextZoom = Phaser.Math.Clamp(cam.zoom * factor, 0.42, 1.55);
+          cam.scrollX -= (midX - this.pinchPrevMidX) / cam.zoom;
+          cam.scrollY -= (midY - this.pinchPrevMidY) / cam.zoom;
+          cam.setZoom(nextZoom);
+        }
+        this.pinchPrevDist = dist;
+        this.pinchPrevMidX = midX;
+        this.pinchPrevMidY = midY;
+        return;
+      }
+
+      if (this.isBuildMode && !pointer.wasTouch) {
+        this.isTouchBuildPreview = false;
         this.updateBuildGhostAtPointer(pointer);
       }
 
-      if (this.isMarqueeSelecting && pointer.leftButtonDown()) {
+      if (
+        this.isMarqueeSelecting &&
+        (pointer.leftButtonDown() || (pointer.wasTouch && pointer.isDown))
+      ) {
         const dx = pointer.x - this.panStartX;
         const dy = pointer.y - this.panStartY;
         if (Math.hypot(dx, dy) > 10) {
@@ -3004,6 +3115,18 @@ export class GameScene extends Phaser.Scene {
     this.input.on(
       'pointerup',
       (pointer: Phaser.Input.Pointer, currentlyOver: Phaser.GameObjects.GameObject[]) => {
+        if (this.isPinching) {
+          if (!this.input.pointer1.isDown || !this.input.pointer2.isDown) {
+            this.isPinching = false;
+            this.isPanning = false;
+            this.isMarqueeSelecting = false;
+            this.panMoved = false;
+            this.marqueeGfx.clear();
+            this.pinchEndGuardUntil = this.time.now + 200;
+          }
+          return;
+        }
+
         const wasDrag = this.panMoved;
         const wasMarquee = this.isMarqueeSelecting;
         this.isPanning = false;
@@ -3011,7 +3134,13 @@ export class GameScene extends Phaser.Scene {
         this.panMoved = false;
         this.marqueeGfx.clear();
 
-        if (this.time.now < this.uiClickGuardUntil) return;
+        if (
+          this.isMenuPaused ||
+          this.time.now < this.uiClickGuardUntil ||
+          this.time.now < this.pinchEndGuardUntil
+        ) {
+          return;
+        }
 
         if (wasMarquee && wasDrag && !this.isBuildMode) {
           const minX = Math.min(this.marqueeStartX, pointer.worldX);
@@ -3030,6 +3159,10 @@ export class GameScene extends Phaser.Scene {
           );
           this.selectVillagerList(inside);
           if (inside.length > 0) SoundFX.playSelect();
+          if (this.touchMarqueeMode) {
+            this.touchMarqueeMode = false;
+            this.events.emit('marquee-mode-updated', false);
+          }
           return;
         }
 
@@ -3037,19 +3170,26 @@ export class GameScene extends Phaser.Scene {
 
         const worldX = pointer.worldX;
         const worldY = pointer.worldY;
+        const isTouch = pointer.wasTouch;
 
         if (this.isBuildMode) {
-          if (!pointer.wasTouch && pointer.rightButtonReleased()) {
+          if (isTouch) {
+            this.isTouchBuildPreview = true;
+            this.updateBuildGhostAtWorld(worldX, worldY);
+            SoundFX.playSelect();
+          } else if (pointer.rightButtonReleased()) {
             this.setBuildMode(null);
-          } else if (pointer.wasTouch || pointer.leftButtonReleased()) {
+          } else if (pointer.leftButtonReleased()) {
             this.tryPlaceBuildingAt(worldX, worldY);
           }
           return;
         }
 
+        const touchPad = isTouch ? Math.max(14, 20 / this.cameras.main.zoom) : 0;
+
         const hitVillager =
           (currentlyOver.find((obj) => obj instanceof Villager) as Villager | undefined) ??
-          this.findVillagerAt(worldX, worldY);
+          this.findVillagerAt(worldX, worldY, touchPad);
         const hitHut =
           (currentlyOver.find((obj) => obj instanceof Hut) as Hut | undefined) ??
           this.findHutAt(worldX, worldY);
@@ -3059,23 +3199,22 @@ export class GameScene extends Phaser.Scene {
         const hitHostile =
           (currentlyOver.find((obj) => obj instanceof Predator) as Predator | undefined) ??
           (currentlyOver.find((obj) => obj instanceof EnemyUnit) as EnemyUnit | undefined) ??
-          this.findHostileAt(worldX, worldY);
+          this.findHostileAt(worldX, worldY, touchPad);
         const hitAnimal =
           (currentlyOver.find((obj) => obj instanceof Animal) as Animal | undefined) ??
-          this.findAnimalAt(worldX, worldY);
+          this.findAnimalAt(worldX, worldY, touchPad);
         const hitCarcass =
           (currentlyOver.find((obj) => obj instanceof AnimalCarcass) as AnimalCarcass | undefined) ??
-          this.findCarcassAt(worldX, worldY);
+          this.findCarcassAt(worldX, worldY, touchPad);
         const hitNode =
           (currentlyOver.find((obj) => obj instanceof ResourceNode) as ResourceNode | undefined) ??
-          this.findNodeAt(worldX, worldY);
+          this.findNodeAt(worldX, worldY, touchPad);
         const lakeHitTarget = this.lake.getHitTarget();
         const hitLake =
           currentlyOver.includes(lakeHitTarget) || this.lake.isPointInsideClickArea(worldX, worldY)
             ? this.lake
             : undefined;
-
-        const isTouch = pointer.wasTouch;
+        const hitCampfire = this.isPointOnCampfire(worldX, worldY);
 
         if (!isTouch) {
           if (pointer.leftButtonReleased()) {
@@ -3096,6 +3235,8 @@ export class GameScene extends Phaser.Scene {
               } else {
                 this.selectBuilding(hitBuilding);
               }
+            } else if (hitCampfire) {
+              this.events.emit('campfire-clicked');
             } else {
               this.selectVillagerList([]);
               this.selectBuilding(null);
@@ -3114,9 +3255,24 @@ export class GameScene extends Phaser.Scene {
             );
           }
         } else {
+          // Android / Touch Tap rules:
+          // 1) Tap villager -> select
+          // 2) Tap finished building -> open building panel / chronicle
+          // 3) Tap campfire -> open defense alarm panel
+          // 4) Tap resource / lake / animal / hostile / unfinished site / ground with selected unit(s) -> issue order
+          // 5) Otherwise close open building panel
           if (hitVillager) {
             this.selectVillagerList([hitVillager]);
             SoundFX.playSelect();
+          } else if (hitBuilding && hitBuilding.isComplete()) {
+            if (hitBuilding.buildingType === 'burial_mound') {
+              this.openChronicle();
+            } else {
+              this.selectBuilding(hitBuilding);
+            }
+            SoundFX.playSelect();
+          } else if (hitCampfire) {
+            this.events.emit('campfire-clicked');
           } else if (this.selectedVillagers.length > 0) {
             this.issueCommandToGroup(
               hitHut ?? null,
@@ -3129,12 +3285,8 @@ export class GameScene extends Phaser.Scene {
               worldX,
               worldY
             );
-          } else if (hitBuilding && hitBuilding.isComplete()) {
-            if (hitBuilding.buildingType === 'burial_mound') {
-              this.openChronicle();
-            } else {
-              this.selectBuilding(hitBuilding);
-            }
+          } else {
+            this.selectBuilding(null);
           }
         }
       }
@@ -3350,12 +3502,19 @@ export class GameScene extends Phaser.Scene {
     this.spawnTargetRing(clampedX, clampedY, 0x70e000, false);
   }
 
-  private findHostileAt(wx: number, wy: number): CombatTarget | null {
+  private isPointOnCampfire(wx: number, wy: number): boolean {
+    return Phaser.Math.Distance.Between(wx, wy, this.campfire.x, this.campfire.y - 10) <= 58;
+  }
+
+  private findHostileAt(wx: number, wy: number, touchPad = 0): CombatTarget | null {
     for (const p of this.predators) {
       if (p.isAlive() && p.isPointInsideClickArea(wx, wy)) return p;
     }
     for (const u of this.rivalSystem.units) {
       if (u.isAlive() && u.isPointInsideClickArea(wx, wy)) return u;
+    }
+    if (touchPad > 0) {
+      return this.findNearestHostileForPlayer(wx, wy, 28 + touchPad);
     }
     return null;
   }
@@ -3397,10 +3556,22 @@ export class GameScene extends Phaser.Scene {
     return best;
   }
 
-  private findVillagerAt(worldX: number, worldY: number): Villager | undefined {
-    return this.villagers.find(
-      (v) => v.visible && Phaser.Math.Distance.Between(worldX, worldY, v.x, v.y - 18) <= 32
-    );
+  private findVillagerAt(
+    worldX: number,
+    worldY: number,
+    extraRadius = 0
+  ): Villager | undefined {
+    let best: Villager | undefined;
+    let bestDist = 32 + extraRadius;
+    for (const v of this.villagers) {
+      if (!v.visible || !v.isAlive()) continue;
+      const d = Phaser.Math.Distance.Between(worldX, worldY, v.x, v.y - 18);
+      if (d <= bestDist) {
+        bestDist = d;
+        best = v;
+      }
+    }
+    return best;
   }
 
   private findHutAt(worldX: number, worldY: number): Hut | undefined {
@@ -3411,18 +3582,56 @@ export class GameScene extends Phaser.Scene {
     return this.buildings.find((b) => b.scene && b.isPointInsideClickArea(worldX, worldY));
   }
 
-  private findAnimalAt(worldX: number, worldY: number): Animal | undefined {
-    return this.animals.find((a) => a.isAlive() && a.isPointInsideClickArea(worldX, worldY));
+  private findAnimalAt(
+    worldX: number,
+    worldY: number,
+    touchPad = 0
+  ): Animal | undefined {
+    const exact = this.animals.find((a) => a.isAlive() && a.isPointInsideClickArea(worldX, worldY));
+    if (exact || touchPad <= 0) return exact;
+    let best: Animal | undefined;
+    let bestDist = 28 + touchPad;
+    for (const a of this.animals) {
+      if (!a.isAlive()) continue;
+      const d = Phaser.Math.Distance.Between(worldX, worldY, a.x, a.y - 12);
+      if (d <= bestDist) {
+        bestDist = d;
+        best = a;
+      }
+    }
+    return best;
   }
 
-  private findCarcassAt(worldX: number, worldY: number): AnimalCarcass | undefined {
-    return this.carcasses.find((c) => c.scene && c.isPointInsideClickArea(worldX, worldY));
+  private findCarcassAt(
+    worldX: number,
+    worldY: number,
+    touchPad = 0
+  ): AnimalCarcass | undefined {
+    const exact = this.carcasses.find((c) => c.scene && c.isPointInsideClickArea(worldX, worldY));
+    if (exact || touchPad <= 0) return exact;
+    return this.findNearestCarcass(worldX, worldY, 26 + touchPad) ?? undefined;
   }
 
-  private findNodeAt(worldX: number, worldY: number): ResourceNode | undefined {
-    return this.resourceNodes.find(
+  private findNodeAt(
+    worldX: number,
+    worldY: number,
+    touchPad = 0
+  ): ResourceNode | undefined {
+    const exact = this.resourceNodes.find(
       (n) => n.scene && n.amount > 0 && n.isPointInsideClickArea(worldX, worldY)
     );
+    if (exact || touchPad <= 0) return exact;
+    let best: ResourceNode | undefined;
+    let bestDist = 30 + touchPad;
+    for (const n of this.resourceNodes) {
+      if (!n.scene || n.amount <= 0) continue;
+      const d = Phaser.Math.Distance.Between(worldX, worldY, n.x, n.y - 14);
+      if (d <= bestDist) {
+        bestDist = d;
+        best = n;
+      }
+    }
+    return best;
   }
 
   private findAvailableSleepHut(x: number, y: number): Hut | null {

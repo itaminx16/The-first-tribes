@@ -6,6 +6,14 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
+    <meta name="theme-color" content="#1c130c" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Первісні Племена" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
     <title>Первісні Племена — Prehistoric Tribes</title>
     <style>
       * {
@@ -13,6 +21,7 @@
         user-select: none;
         -webkit-user-select: none;
         -webkit-touch-callout: none;
+        -webkit-tap-highlight-color: transparent;
       }
       html,
       body {
@@ -21,9 +30,9 @@
         width: 100%;
         height: 100%;
         overflow: hidden;
-        background-color: #1f2d1b;
+        background-color: #110a06;
         touch-action: none;
-        font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
       }
       #game-container {
         width: 100%;
@@ -40,6 +49,9 @@
   </head>
   <body>
     <div id="game-container"></div>
+    <div id="menu-overlay" hidden></div>
+    <div id="pwa-update-toast" hidden></div>
+    <div id="rotate-hint" hidden></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

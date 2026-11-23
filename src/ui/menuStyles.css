@@ -1,0 +1,778 @@
+[hidden] {
+  display: none !important;
+}
+
+#menu-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 50% 22%, #2e1c10 0%, #170f09 56%, #0b0704 100%);
+  color: #f5ebe0;
+  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+    max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  touch-action: pan-y;
+}
+
+.ft-home-wrap {
+  width: 100%;
+  max-width: 420px;
+  max-height: 100%;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 14px;
+  padding: 18px 14px;
+  margin: auto;
+}
+
+.ft-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.ft-brand-icon-wrap {
+  width: 68px;
+  height: 68px;
+  border-radius: 18px;
+  border: 2px solid rgba(217, 155, 82, 0.72);
+  background: #1c120a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+}
+
+.ft-brand-icon {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.ft-brand-fallback {
+  font-size: 34px;
+  line-height: 1;
+}
+
+.ft-brand-title {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  color: #ffe066;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.65);
+}
+
+.ft-brand-sub {
+  margin: 0;
+  font-size: 13.5px;
+  color: #d6c2a8;
+}
+
+.ft-home-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ft-btn {
+  appearance: none;
+  border: 1.5px solid rgba(201, 138, 75, 0.45);
+  background: rgba(40, 26, 17, 0.94);
+  color: #f5ebe0;
+  border-radius: 12px;
+  min-height: 50px;
+  padding: 10px 16px;
+  font-family: inherit;
+  font-size: 15.5px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  transition: transform 0.08s ease, background-color 0.14s ease, border-color 0.14s ease;
+  touch-action: manipulation;
+}
+
+.ft-btn:hover {
+  background: rgba(58, 38, 24, 0.98);
+  border-color: rgba(217, 155, 82, 0.8);
+}
+
+.ft-btn:active {
+  transform: scale(0.985);
+}
+
+.ft-btn-primary {
+  background: linear-gradient(180deg, #1b783e 0%, #14532d 100%);
+  border-color: #4ade80;
+  color: #fef9c3;
+  box-shadow: 0 6px 18px rgba(20, 83, 45, 0.45);
+}
+
+.ft-btn-primary:hover {
+  background: linear-gradient(180deg, #1f8a47 0%, #166534 100%);
+  border-color: #86efac;
+}
+
+.ft-btn-continue {
+  flex-direction: column;
+  gap: 2px;
+  min-height: 58px;
+}
+
+.ft-btn-sub {
+  font-size: 12px;
+  font-weight: 500;
+  color: #bbf7d0;
+  opacity: 0.92;
+}
+
+.ft-btn-install {
+  background: linear-gradient(180deg, #1d4e78 0%, #163756 100%);
+  border-color: rgba(56, 189, 248, 0.72);
+  color: #e0f2fe;
+}
+
+.ft-btn-install:hover {
+  background: linear-gradient(180deg, #235c8d 0%, #1a4266 100%);
+  border-color: #7dd3fc;
+}
+
+.ft-btn-split {
+  justify-content: space-between;
+  padding-inline: 18px;
+}
+
+.ft-badge {
+  background: rgba(15, 10, 6, 0.72);
+  border: 1px solid rgba(201, 138, 75, 0.5);
+  color: #fde68a;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.ft-install-guide {
+  background: rgba(22, 42, 60, 0.92);
+  border: 1.5px solid rgba(56, 189, 248, 0.55);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.48;
+  color: #e0f2fe;
+}
+
+.ft-install-guide strong {
+  color: #fde68a;
+}
+
+.ft-install-guide ol {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.ft-home-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 12px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: #a8957e;
+}
+
+.ft-status-pill {
+  background: rgba(25, 17, 11, 0.9);
+  border: 1px solid rgba(201, 138, 75, 0.35);
+  border-radius: 999px;
+  padding: 3px 10px;
+  color: #d6c2a8;
+}
+
+.ft-status-pill.ready {
+  border-color: rgba(74, 222, 128, 0.5);
+  color: #86efac;
+}
+
+.ft-status-pill.offline {
+  border-color: rgba(251, 191, 36, 0.55);
+  color: #fde68a;
+}
+
+/* Sub-views Card Shell (New Game / Saves / Settings) */
+.ft-panel {
+  width: 100%;
+  max-width: 860px;
+  height: 100%;
+  max-height: 680px;
+  margin: auto;
+  background: rgba(24, 15, 9, 0.97);
+  border: 1.8px solid rgba(201, 138, 75, 0.72);
+  border-radius: 18px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.72);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.ft-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  background: rgba(38, 24, 15, 0.96);
+  border-bottom: 1.5px solid rgba(201, 138, 75, 0.32);
+  flex-shrink: 0;
+}
+
+.ft-panel-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+  color: #ffe066;
+  flex: 1;
+  text-align: center;
+}
+
+.ft-back-btn {
+  appearance: none;
+  border: 1.4px solid rgba(201, 138, 75, 0.5);
+  background: rgba(52, 34, 21, 0.95);
+  color: #fde68a;
+  border-radius: 10px;
+  min-height: 40px;
+  padding: 6px 14px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: manipulation;
+  white-space: nowrap;
+}
+
+.ft-back-btn:hover {
+  background: rgba(74, 48, 30, 0.98);
+}
+
+.ft-header-spacer {
+  width: 82px;
+  flex-shrink: 0;
+}
+
+.ft-scroll-body {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.ft-panel-footer {
+  padding: 12px 16px;
+  background: rgba(34, 21, 13, 0.98);
+  border-top: 1.5px solid rgba(201, 138, 75, 0.32);
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+}
+
+.ft-panel-footer .ft-btn {
+  width: 100%;
+  max-width: 420px;
+}
+
+.ft-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ft-section-title {
+  margin: 0;
+  font-size: 14.5px;
+  font-weight: 800;
+  color: #fde68a;
+  letter-spacing: 0.2px;
+}
+
+.ft-map-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ft-map-card {
+  appearance: none;
+  text-align: left;
+  background: rgba(18, 12, 7, 0.92);
+  border: 1.5px solid rgba(140, 100, 66, 0.45);
+  border-radius: 11px;
+  padding: 10px 12px;
+  min-height: 48px;
+  color: #e6ccb2;
+  font-family: inherit;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  touch-action: manipulation;
+}
+
+.ft-map-card:hover {
+  border-color: rgba(217, 155, 82, 0.85);
+}
+
+.ft-map-card.active {
+  background: rgba(26, 54, 82, 0.95);
+  border-color: #38bdf8;
+  color: #fef08a;
+}
+
+.ft-map-card-name {
+  font-size: 13.5px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.ft-map-card-tag {
+  font-size: 11.5px;
+  color: #a8957e;
+}
+
+.ft-map-card.active .ft-map-card-tag {
+  color: #bae6fd;
+}
+
+.ft-map-preview {
+  background: rgba(17, 26, 34, 0.9);
+  border: 1.5px solid rgba(56, 189, 248, 0.55);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ft-map-preview-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+  color: #67e8f9;
+}
+
+.ft-map-preview-desc {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #f5ebe0;
+}
+
+.ft-map-preview-meta {
+  font-size: 12px;
+  font-weight: 700;
+  color: #86efac;
+}
+
+.ft-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ft-choice-card {
+  appearance: none;
+  text-align: left;
+  background: rgba(18, 12, 7, 0.92);
+  border: 1.5px solid rgba(140, 100, 66, 0.45);
+  border-radius: 11px;
+  padding: 10px 12px;
+  min-height: 54px;
+  color: #d6c2a8;
+  font-family: inherit;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  touch-action: manipulation;
+}
+
+.ft-choice-card strong {
+  font-size: 14px;
+  color: #f5ebe0;
+}
+
+.ft-choice-card span {
+  font-size: 12px;
+  color: #a8957e;
+}
+
+.ft-choice-card.active {
+  background: rgba(20, 83, 45, 0.92);
+  border-color: #4ade80;
+}
+
+.ft-choice-card.active strong {
+  color: #fef08a;
+}
+
+.ft-choice-card.active span {
+  color: #bbf7d0;
+}
+
+.ft-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: #e6ccb2;
+  margin-bottom: 6px;
+}
+
+.ft-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ft-pill {
+  appearance: none;
+  flex: 1 1 auto;
+  min-width: 72px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1.5px solid rgba(140, 100, 66, 0.48);
+  background: rgba(18, 12, 7, 0.92);
+  color: #d6c2a8;
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: center;
+  touch-action: manipulation;
+}
+
+.ft-pill.active {
+  background: rgba(124, 45, 18, 0.95);
+  border-color: #fb923c;
+  color: #fef08a;
+}
+
+.ft-pill.active-green {
+  background: rgba(20, 83, 45, 0.95);
+  border-color: #4ade80;
+  color: #fef08a;
+}
+
+.ft-pill.active-blue {
+  background: rgba(22, 78, 99, 0.95);
+  border-color: #22d3ee;
+  color: #cffafe;
+}
+
+.ft-two-col {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+/* Saves Slot Cards */
+.ft-save-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ft-save-card {
+  background: rgba(18, 12, 7, 0.94);
+  border: 1.5px solid rgba(140, 100, 66, 0.5);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.ft-save-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 200px;
+  flex: 1;
+}
+
+.ft-save-title {
+  font-size: 14.5px;
+  font-weight: 800;
+  color: #fde68a;
+}
+
+.ft-save-title.empty {
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.ft-save-meta {
+  font-size: 12.5px;
+  color: #cbd5e1;
+}
+
+.ft-save-meta.empty {
+  color: #64748b;
+}
+
+.ft-save-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ft-sm-btn {
+  appearance: none;
+  min-height: 42px;
+  padding: 7px 14px;
+  border-radius: 9px;
+  border: 1.4px solid transparent;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: manipulation;
+  white-space: nowrap;
+}
+
+.ft-sm-btn.load {
+  background: #166534;
+  border-color: #4ade80;
+  color: #fef08a;
+}
+
+.ft-sm-btn.save {
+  background: #1e3a5f;
+  border-color: #38bdf8;
+  color: #e0f2fe;
+}
+
+.ft-sm-btn.del {
+  background: #451a1a;
+  border-color: #f87171;
+  color: #fecaca;
+}
+
+.ft-sm-btn.del-confirm {
+  background: #991b1b;
+  border-color: #fca5a5;
+  color: #ffffff;
+}
+
+.ft-sm-btn.neutral {
+  background: #3b281a;
+  border-color: #c98a4b;
+  color: #fde68a;
+}
+
+/* Settings Blocks */
+.ft-settings-card {
+  background: rgba(18, 12, 7, 0.92);
+  border: 1.4px solid rgba(140, 100, 66, 0.42);
+  border-radius: 12px;
+  padding: 13px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ft-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.ft-setting-row strong {
+  font-size: 14px;
+  color: #f5ebe0;
+}
+
+.ft-setting-note {
+  font-size: 12.5px;
+  color: #cbd5e1;
+  line-height: 1.45;
+}
+
+.ft-guide-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: #d6c2a8;
+}
+
+/* Update Toast & Portrait Rotate Hint */
+#pwa-update-toast {
+  position: fixed;
+  left: 50%;
+  bottom: max(14px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 1200;
+  background: rgba(20, 38, 52, 0.96);
+  border: 1.6px solid #38bdf8;
+  border-radius: 999px;
+  padding: 8px 10px 8px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #e0f2fe;
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+  max-width: calc(100vw - 24px);
+}
+
+#rotate-hint {
+  position: fixed;
+  left: 50%;
+  top: max(8px, env(safe-area-inset-top));
+  transform: translateX(-50%);
+  z-index: 900;
+  background: rgba(34, 22, 13, 0.94);
+  border: 1.4px solid #c98a4b;
+  border-radius: 12px;
+  padding: 7px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #fde68a;
+  font-size: 12px;
+  font-weight: 600;
+  max-width: calc(100vw - 16px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+
+.ft-toast-btn {
+  appearance: none;
+  border: none;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 800;
+  cursor: pointer;
+  background: #166534;
+  color: #fef9c3;
+  touch-action: manipulation;
+}
+
+.ft-toast-close {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: #fca5a5;
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+  padding: 4px 6px;
+  touch-action: manipulation;
+}
+
+/* Portrait phone adaptations */
+@media (max-width: 600px) {
+  .ft-map-grid,
+  .ft-mode-grid,
+  .ft-two-col {
+    grid-template-columns: 1fr;
+  }
+
+  .ft-panel {
+    max-height: 100%;
+    border-radius: 14px;
+  }
+
+  .ft-brand-title {
+    font-size: 23px;
+  }
+}
+
+/* Android compact landscape height adaptations */
+@media (max-height: 480px) {
+  #menu-overlay {
+    padding: max(6px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right))
+      max(6px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+  }
+
+  .ft-home-wrap {
+    padding: 8px 10px;
+    gap: 8px;
+  }
+
+  .ft-brand {
+    flex-direction: row;
+    text-align: left;
+    justify-content: center;
+    gap: 12px;
+    margin-bottom: 0;
+  }
+
+  .ft-brand-icon-wrap {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+  }
+
+  .ft-brand-title {
+    font-size: 20px;
+  }
+
+  .ft-btn {
+    min-height: 44px;
+    padding: 8px 14px;
+    font-size: 14.5px;
+  }
+
+  .ft-btn-continue {
+    min-height: 48px;
+  }
+
+  .ft-panel {
+    max-height: 100%;
+    border-radius: 14px;
+  }
+
+  .ft-panel-header {
+    padding: 8px 12px;
+  }
+
+  .ft-scroll-body {
+    padding: 12px;
+    gap: 12px;
+  }
+
+  .ft-panel-footer {
+    padding: 8px 12px;
+  }
+}

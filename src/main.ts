@@ -1,11 +1,15 @@
+import './ui/menuStyles.css';
 import Phaser from 'phaser';
 import { GameScene } from './scenes/GameScene';
 import { UIScene } from './scenes/UIScene';
+import { pwaManager } from './utils/pwa';
+
+pwaManager.init();
 
 const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
   parent: 'game-container',
-  backgroundColor: '#5a9e3e',
+  backgroundColor: '#110a06',
   scale: {
     mode: Phaser.Scale.RESIZE,
     autoCenter: Phaser.Scale.CENTER_BOTH,
@@ -13,7 +17,7 @@ const config: Phaser.Types.Core.GameConfig = {
     height: window.innerHeight
   },
   input: {
-    activePointers: 2
+    activePointers: 3
   },
   scene: [GameScene, UIScene]
 };

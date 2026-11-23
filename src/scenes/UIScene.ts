@@ -8,19 +8,11 @@ import {
   CalendarState,
   ChiefStatus,
   DEFAULT_GAME_SETUP,
-  DIFFICULTY_LABELS_UK,
-  DifficultyLevel,
   formatAgeUk,
-  GameMode,
   GameSetupConfig,
   LIFE_STAGE_LABELS_UK,
-  MAP_PRESET_ORDER,
-  MAP_PRESETS,
-  MapPresetId,
   MAX_STORAGE,
   MinimapData,
-  MUSIC_TRACK_LABELS_UK,
-  MusicTrackId,
   PopulationState,
   ProfessionId,
   RivalTribeSnapshot,
@@ -40,7 +32,9 @@ import {
   WARRIOR_CLASS_LABELS_UK,
   WarriorClass,
 } from '../types/game';
-import { MAX_SAVE_SLOTS, SaveSummary } from '../systems/SaveSystem';
+import { SaveSummary } from '../systems/SaveSystem';
+import { MainMenuOverlay } from '../ui/MainMenuOverlay';
+import { pwaManager } from '../utils/pwa';
 import { SoundFX } from '../utils/SoundFX';
 
 const SEASON_TEXT_COLORS: Record<Season, string> = {
@@ -217,35 +211,20 @@ export class UIScene extends Phaser.Scene {
   private diplomacyModalContainer!: Phaser.GameObjects.Container;
   private diplomacyBodyContainer!: Phaser.GameObjects.Container;
 
-  // Main Menu & Settings Modal (persistent controls — never destroyed/rebuilt on click)
-  private mainMenuContainer!: Phaser.GameObjects.Container;
-  private menuDraftConfig: GameSetupConfig = { ...DEFAULT_GAME_SETUP };
-  private menuContinueBtn!: Phaser.GameObjects.Text;
+  // Brand-New HTML Main Menu / New Game / Saves / Settings Overlay
+  private menuOverlay!: MainMenuOverlay;
+  private isMenuOpenState = false;
   private isInitialBootMenu = false;
-  private menuMapButtons = new Map<MapPresetId, Phaser.GameObjects.Text>();
-  private menuPrevTitle!: Phaser.GameObjects.Text;
-  private menuPrevDesc!: Phaser.GameObjects.Text;
-  private menuPrevStats!: Phaser.GameObjects.Text;
-  private menuModeButtons = new Map<GameMode, Phaser.GameObjects.Text>();
-  private menuDiffButtons = new Map<DifficultyLevel, Phaser.GameObjects.Text>();
-  private menuRivalButtons = new Map<0 | 1 | 2 | 3, Phaser.GameObjects.Text>();
-  private menuFogBtn!: Phaser.GameObjects.Text;
-  private menuMusicButtons = new Map<MusicTrackId, Phaser.GameObjects.Text>();
-  private menuAmbBtn!: Phaser.GameObjects.Text;
-  private menuStartBtn!: Phaser.GameObjects.Text;
-  private menuSavesBtn!: Phaser.GameObjects.Text;
-  private latestSavesList: Array<SaveSummary | null> = [];
 
-  // 5-Slot Saves Manager Modal (persistent slot rows)
-  private savesModalContainer!: Phaser.GameObjects.Container;
-  private saveSlotRows: Array<{
-    slotId: number;
-    titleText: Phaser.GameObjects.Text;
-    infoText: Phaser.GameObjects.Text;
-    saveBtn: Phaser.GameObjects.Text;
-    loadBtn: Phaser.GameObjects.Text;
-    deleteBtn: Phaser.GameObjects.Text;
-  }> = [];
+  // Android Camera Controls & Build Placement Confirm Bar
+  private cameraControlsContainer!: Phaser.GameObjects.Container;
+  private marqueeToggleBtn!: Phaser.GameObjects.Text;
+  private isMarqueeMode = false;
+  private buildConfirmContainer!: Phaser.GameObjects.Container;
+  private buildConfirmBg!: Phaser.GameObjects.Graphics;
+  private buildConfirmTitle!: Phaser.GameObjects.Text;
+  private buildConfirmBtn!: Phaser.GameObjects.Text;
+  private isBuildPreviewValid = true;
 
   // Villager Profile Roster Picker Modal
   private rosterModalContainer!: Phaser.GameObjects.Container;
@@ -316,6 +295,8 @@ export class UIScene extends Phaser.Scene {
     this.createTopBar();
     this.createCalendarBar();
     this.createMinimap();
+    this.createCameraControls();
+    this.createBuildConfirmBar();
     this.createUnitPanel();
     this.createGroupPanel();
     this.createQuickDock();
@@ -326,10 +307,62 @@ export class UIScene extends Phaser.Scene {
     this.createTechModal();
     this.createChronicleModal();
     this.createDiplomacyModal();
-    this.createMainMenuModal();
-    this.createSavesModal();
     this.createRosterModal();
     this.createHint();
+
+    this.menuOverlay = new MainMenuOverlay({
+      onContinueGame: () => {
+        this.isInitialBootMenu = false;
+        this.openOnlyModal(null);
+      },
+      onStartNewGame: (cfg) => {
+        const sameBootConfig =
+          this.isInitialBootMenu &&
+          cfg.mapId === this.latestConfig.mapId &&
+          cfg.rivalCount === this.latestConfig.rivalCount &&
+          cfg.difficulty === this.latestConfig.difficulty &&
+          cfg.mode === this.latestConfig.mode &&
+          cfg.fogOfWar === this.latestConfig.fogOfWar;
+
+        this.isInitialBootMenu = false;
+        this.openOnlyModal(null);
+        if (!sameBootConfig) {
+          this.events.emit('start-new-game', { ...cfg });
+        }
+      },
+      onSaveSlot: (slotId) => {
+        this.events.emit('save-game', slotId);
+      },
+      onLoadSlot: (slotId) => {
+        this.isInitialBootMenu = false;
+        this.openOnlyModal(null);
+        this.events.emit('load-game', slotId);
+      },
+      onDeleteSlot: (slotId) => {
+        this.events.emit('delete-save', slotId);
+      },
+      onSetMusicTrack: (track) => {
+        this.events.emit('set-music-track', track);
+      },
+      onSetAmbientSounds: (enabled) => {
+        this.events.emit('set-ambient-sounds', enabled);
+      },
+      onToggleFog: () => {
+        this.events.emit('toggle-fog');
+      },
+      onToggleMute: () => {
+        const muted = SoundFX.toggleMute();
+        this.muteBtnText.setText(muted ? '🔇' : '🔊');
+        return muted;
+      },
+      onClose: () => {
+        this.isInitialBootMenu = false;
+        this.openOnlyModal(null);
+      },
+    });
+    this.events.once('shutdown', () => {
+      this.menuOverlay.destroy();
+    });
 
     this.layoutUI(this.scale.width, this.scale.height);
     this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
@@ -364,6 +397,7 @@ export class UIScene extends Phaser.Scene {
       this.buildingPanel.setVisible(false);
       this.campfirePanel.setVisible(!this.campfirePanel.visible);
       this.refreshCampfirePanel();
+      this.syncQuickDockVisibility();
     });
     gameScene.events.on('open-tech-modal', () => {
       this.openOnlyModal('tech');
@@ -392,6 +426,15 @@ export class UIScene extends Phaser.Scene {
     gameScene.events.on('build-mode-updated', (type: BuildingType | null) => {
       this.activeBuildType = type;
       this.refreshActionBar();
+      this.refreshBuildConfirmBar();
+    });
+    gameScene.events.on('build-preview-status', (st: { valid: boolean; canAfford: boolean }) => {
+      this.isBuildPreviewValid = st.valid;
+      this.refreshBuildConfirmBar();
+    });
+    gameScene.events.on('marquee-mode-updated', (active: boolean) => {
+      this.isMarqueeMode = active;
+      this.refreshCameraControls();
     });
     gameScene.events.on('tech-updated', (tech: TechState) => {
       this.techState = tech;
@@ -424,24 +467,15 @@ export class UIScene extends Phaser.Scene {
     });
     gameScene.events.on('config-updated', (cfg: GameSetupConfig) => {
       this.latestConfig = { ...cfg };
-      this.menuDraftConfig = { ...cfg };
       this.refreshActionBar();
-      if (this.mainMenuContainer.visible) {
-        this.refreshMainMenuModal();
-      }
+      this.menuOverlay.syncConfig(cfg);
     });
     gameScene.events.on('show-main-menu-on-boot', () => {
       this.isInitialBootMenu = true;
       this.openOnlyModal('menu');
     });
     gameScene.events.on('saves-list-updated', (list: Array<SaveSummary | null>) => {
-      this.latestSavesList = list;
-      if (this.mainMenuContainer.visible) {
-        this.refreshMainMenuModal();
-      }
-      if (this.savesModalContainer.visible) {
-        this.refreshSavesModal();
-      }
+      this.menuOverlay.syncSaves(list);
     });
 
     this.events.emit('ui-ready');
@@ -452,22 +486,29 @@ export class UIScene extends Phaser.Scene {
     this.techModalContainer.setVisible(which === 'tech');
     this.chronicleContainer.setVisible(which === 'chronicle');
     this.diplomacyModalContainer.setVisible(which === 'diplomacy');
-    this.mainMenuContainer.setVisible(which === 'menu');
     this.rosterModalContainer.setVisible(which === 'roster');
-    this.savesModalContainer.setVisible(false);
 
     const isMenu = which === 'menu';
+    this.isMenuOpenState = isMenu;
     this.setHudVisible(!isMenu);
     if (this.scene.get('GameScene')) {
       this.scene.setVisible(!isMenu, 'GameScene');
     }
     this.events.emit('set-menu-open', isMenu);
 
+    if (isMenu) {
+      this.menuOverlay.open('home', {
+        isInitialBoot: this.isInitialBootMenu,
+        returnToGameOnBack: false,
+      });
+    } else if (this.menuOverlay.isMenuOpen()) {
+      this.menuOverlay.close();
+    }
+
     if (which === 'build') this.refreshBuildModal();
     if (which === 'tech') this.refreshTechModal();
     if (which === 'chronicle') this.refreshChronicleModal();
     if (which === 'diplomacy') this.refreshDiplomacyModal();
-    if (which === 'menu') this.refreshMainMenuModal();
     if (which === 'roster') this.refreshRosterModal();
   }
 
@@ -475,17 +516,24 @@ export class UIScene extends Phaser.Scene {
     this.topBarContainer.setVisible(visible);
     this.calendarContainer.setVisible(visible);
     this.minimapContainer.setVisible(visible);
-    this.quickDockContainer.setVisible(visible);
+    this.cameraControlsContainer.setVisible(visible);
     this.actionBarContainer.setVisible(visible);
-    this.hintText.setVisible(visible && this.scale.width >= 820);
+    this.buildConfirmContainer.setVisible(visible && this.activeBuildType !== null);
+    this.hintText.setVisible(
+      visible && this.scale.width >= 1024 && !this.sys.game.device.input.touch
+    );
     if (!visible) {
+      this.quickDockContainer.setVisible(false);
       this.unitPanel.setVisible(false);
       this.groupPanel.setVisible(false);
       this.buildingPanel.setVisible(false);
       this.campfirePanel.setVisible(false);
     } else {
+      this.muteBtnText.setText(SoundFX.isMuted() ? '🔇' : '🔊');
       this.refreshSelectionPanels();
       this.refreshBuildingPanel();
+      this.refreshBuildConfirmBar();
+      this.syncQuickDockVisibility();
     }
   }
 
@@ -580,8 +628,7 @@ export class UIScene extends Phaser.Scene {
       SoundFX.unlock();
       this.events.emit('ui-button-clicked');
       this.isInitialBootMenu = false;
-      this.menuDraftConfig = { ...this.latestConfig };
-      this.openOnlyModal(this.mainMenuContainer.visible ? null : 'menu');
+      this.openOnlyModal('menu');
     });
 
     const muteX = 788;
@@ -1004,6 +1051,142 @@ export class UIScene extends Phaser.Scene {
     g.strokeRect(m.camX * sx, m.camY * sy, m.camW * sx, m.camH * sy);
   }
 
+  private createCameraControls(): void {
+    const w = 44;
+    const h = 208;
+    this.cameraControlsContainer = this.add.container(0, 0).setDepth(4100);
+
+    const bg = this.add.graphics();
+    bg.fillStyle(0x1f140c, 0.92);
+    bg.fillRoundedRect(0, 0, w, h, 12);
+    bg.lineStyle(1.6, 0xc98a4b, 0.88);
+    bg.strokeRoundedRect(0, 0, w, h, 12);
+
+    const blocker = this.add.zone(w / 2, h / 2, w, h).setInteractive();
+    blocker.on('pointerdown', () => this.events.emit('ui-button-clicked'));
+
+    this.cameraControlsContainer.add([bg, blocker]);
+
+    const mkCtrl = (y: number, label: string, onClick: () => void): Phaser.GameObjects.Text => {
+      const btn = this.add
+        .text(w / 2, y, label, {
+          fontSize: '15px',
+          fontStyle: 'bold',
+          color: '#fde68a',
+          backgroundColor: '#382618',
+          padding: { x: 8, y: 6 },
+        })
+        .setOrigin(0.5)
+        .setInteractive({ useHandCursor: true });
+      btn.on('pointerdown', () => {
+        SoundFX.unlock();
+        this.events.emit('ui-button-clicked');
+        onClick();
+      });
+      this.cameraControlsContainer.add(btn);
+      return btn;
+    };
+
+    mkCtrl(24, '➕', () => this.events.emit('camera-zoom', 0.2));
+    mkCtrl(64, '➖', () => this.events.emit('camera-zoom', -0.2));
+    mkCtrl(104, '🔥', () => this.events.emit('camera-home'));
+    this.marqueeToggleBtn = mkCtrl(144, '🔲', () => this.events.emit('toggle-marquee-mode'));
+    mkCtrl(184, '⛶', () => {
+      void pwaManager.toggleFullscreenLandscape();
+    });
+
+    this.refreshCameraControls();
+  }
+
+  private refreshCameraControls(): void {
+    if (!this.marqueeToggleBtn) return;
+    this.marqueeToggleBtn
+      .setBackgroundColor(this.isMarqueeMode ? '#166534' : '#382618')
+      .setColor(this.isMarqueeMode ? '#86efac' : '#fde68a');
+  }
+
+  private createBuildConfirmBar(): void {
+    const w = 420;
+    const h = 48;
+    this.buildConfirmContainer = this.add.container(0, 0).setDepth(4200);
+
+    this.buildConfirmBg = this.add.graphics();
+    const blocker = this.add.zone(0, 0, w, h).setInteractive();
+    blocker.on('pointerdown', () => this.events.emit('ui-button-clicked'));
+
+    this.buildConfirmTitle = this.add
+      .text(-196, 0, '🏗️ Будівництво', {
+        fontSize: '12.5px',
+        fontStyle: 'bold',
+        color: '#ffe066',
+      })
+      .setOrigin(0, 0.5);
+
+    this.buildConfirmBtn = this.add
+      .text(38, 0, '✅ Збудувати', {
+        fontSize: '12px',
+        fontStyle: 'bold',
+        color: '#fef08a',
+        backgroundColor: '#166534',
+        padding: { x: 10, y: 7 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    this.buildConfirmBtn.on('pointerdown', () => {
+      SoundFX.unlock();
+      this.events.emit('ui-button-clicked');
+      this.events.emit('confirm-build-placement');
+    });
+
+    const cancelBtn = this.add
+      .text(148, 0, '❌ Скасувати', {
+        fontSize: '12px',
+        fontStyle: 'bold',
+        color: '#fecaca',
+        backgroundColor: '#7f1d1d',
+        padding: { x: 10, y: 7 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    cancelBtn.on('pointerdown', () => {
+      SoundFX.unlock();
+      this.events.emit('ui-button-clicked');
+      this.events.emit('cancel-build-mode');
+    });
+
+    this.buildConfirmContainer.add([
+      this.buildConfirmBg,
+      blocker,
+      this.buildConfirmTitle,
+      this.buildConfirmBtn,
+      cancelBtn,
+    ]);
+    this.buildConfirmContainer.setVisible(false);
+  }
+
+  private refreshBuildConfirmBar(): void {
+    const w = 420;
+    const h = 48;
+    if (!this.activeBuildType || this.isMenuOpenState) {
+      this.buildConfirmContainer.setVisible(false);
+      return;
+    }
+
+    const def = BUILDING_DEFS[this.activeBuildType];
+    this.buildConfirmTitle.setText(`🏗️ ${def.nameUk}`);
+    this.buildConfirmBg.clear();
+    this.buildConfirmBg.fillStyle(0x21150c, 0.96);
+    this.buildConfirmBg.fillRoundedRect(-w / 2, -h / 2, w, h, 12);
+    this.buildConfirmBg.lineStyle(2, this.isBuildPreviewValid ? 0x4ade80 : 0xf87171, 0.95);
+    this.buildConfirmBg.strokeRoundedRect(-w / 2, -h / 2, w, h, 12);
+
+    this.buildConfirmBtn
+      .setBackgroundColor(this.isBuildPreviewValid ? '#166534' : '#451a1a')
+      .setColor(this.isBuildPreviewValid ? '#fef08a' : '#fca5a5');
+
+    this.buildConfirmContainer.setVisible(true);
+  }
+
   private createUnitPanel(): void {
     this.unitPanel = this.add.container(16, 0);
     this.unitPanelBg = this.add.graphics();
@@ -1014,6 +1197,11 @@ export class UIScene extends Phaser.Scene {
     this.unitPanelBg.lineStyle(2, 0xc98a4b, 0.95);
     this.unitPanelBg.strokeRoundedRect(0, 0, this.cardWidth, this.cardHeight, 16);
 
+    const unitBlocker = this.add
+      .zone(this.cardWidth / 2, this.cardHeight / 2, this.cardWidth, this.cardHeight)
+      .setInteractive();
+    unitBlocker.on('pointerdown', () => this.events.emit('ui-button-clicked'));
+
     this.unitPortrait = this.add.image(44, 72, 'portrait-male-1').setScale(0.52);
     this.unitNameText = this.add.text(88, 10, '', {
       fontSize: '14.5px',
@@ -1021,7 +1209,7 @@ export class UIScene extends Phaser.Scene {
       color: '#ffe066',
     });
     this.unitGenderBadge = this.add
-      .text(this.cardWidth - 14, 10, '', {
+      .text(this.cardWidth - 40, 10, '', {
         fontSize: '10.5px',
         fontStyle: 'bold',
         color: '#f2e8cf',
@@ -1029,6 +1217,22 @@ export class UIScene extends Phaser.Scene {
         padding: { x: 6, y: 2 },
       })
       .setOrigin(1, 0);
+
+    const deselectBtn = this.add
+      .text(this.cardWidth - 12, 10, '✕', {
+        fontSize: '11px',
+        fontStyle: 'bold',
+        color: '#fca5a5',
+        backgroundColor: '#3b1d14',
+        padding: { x: 5, y: 2 },
+      })
+      .setOrigin(1, 0)
+      .setInteractive({ useHandCursor: true });
+    deselectBtn.on('pointerdown', () => {
+      SoundFX.unlock();
+      this.events.emit('ui-button-clicked');
+      this.events.emit('clear-selection');
+    });
 
     this.unitStateText = this.add.text(88, 32, '', { fontSize: '11.5px', color: '#f5ebe0' });
     this.unitCarryText = this.add
@@ -1092,9 +1296,11 @@ export class UIScene extends Phaser.Scene {
 
     this.unitPanel.add([
       this.unitPanelBg,
+      unitBlocker,
       this.unitPortrait,
       this.unitNameText,
       this.unitGenderBadge,
+      deselectBtn,
       this.unitStateText,
       this.unitCarryText,
       this.unitFamilyText,
@@ -1350,6 +1556,7 @@ export class UIScene extends Phaser.Scene {
     closeBtn.on('pointerdown', () => {
       this.events.emit('ui-button-clicked');
       this.campfirePanel.setVisible(false);
+      this.syncQuickDockVisibility();
     });
 
     const desc = this.add.text(
@@ -1938,6 +2145,7 @@ export class UIScene extends Phaser.Scene {
   private refreshBuildingPanel(): void {
     if (!this.latestBuilding || !this.latestBuilding.isComplete) {
       this.buildingPanel.setVisible(false);
+      this.syncQuickDockVisibility();
       return;
     }
     const b = this.latestBuilding;
@@ -2017,6 +2225,7 @@ export class UIScene extends Phaser.Scene {
     }
 
     this.buildingPanel.setVisible(true);
+    this.syncQuickDockVisibility();
   }
 
   // --- Villager Profile Roster Picker Modal (👤 Список жителів) ---
@@ -2416,619 +2625,22 @@ export class UIScene extends Phaser.Scene {
     });
   }
 
-  // --- Main Menu & Settings Screen (Full-Screen Clean Start & Settings) ---
-  private createMainMenuModal(): void {
-    const w = 960;
-    const h = 580;
-    this.mainMenuContainer = this.add.container(0, 0).setDepth(4950);
-
-    const scrim = this.add.rectangle(0, 0, 3200, 3200, 0x0d0906, 1).setInteractive();
-    scrim.on('pointerdown', () => this.events.emit('ui-button-clicked'));
-
-    const bg = this.add.graphics();
-    bg.fillStyle(0x1d130b, 0.99);
-    bg.fillRoundedRect(-w / 2, -h / 2, w, h, 22);
-    bg.lineStyle(3, 0xd99b52, 0.96);
-    bg.strokeRoundedRect(-w / 2, -h / 2, w, h, 22);
-
-    // Header bar
-    const headerBg = this.add.graphics();
-    headerBg.fillStyle(0x2c1c11, 0.98);
-    headerBg.fillRoundedRect(-w / 2 + 16, -h / 2 + 14, w - 32, 64, 14);
-    headerBg.lineStyle(1.5, 0x8c6442, 0.8);
-    headerBg.strokeRoundedRect(-w / 2 + 16, -h / 2 + 14, w - 32, 64, 14);
-
-    const title = this.add.text(
-      -w / 2 + 34,
-      -h / 2 + 23,
-      '🔥 ПЕРВІСНІ ПЛЕМЕНА — Prehistoric Tribes',
-      {
-        fontSize: '21px',
-        fontStyle: 'bold',
-        color: '#ffe066',
-      }
-    );
-    const subtitle = this.add.text(
-      -w / 2 + 34,
-      -h / 2 + 50,
-      'Оберіть карту, режим виживання та параметри світу перед початком',
-      {
-        fontSize: '12.5px',
-        color: '#d6c2a8',
-      }
-    );
-
-    this.menuContinueBtn = this.add
-      .text(w / 2 - 32, -h / 2 + 46, '↩️ Повернутись у гру', {
-        fontSize: '13px',
-        fontStyle: 'bold',
-        color: '#fef08a',
-        backgroundColor: '#3b281a',
-        padding: { x: 14, y: 8 },
-      })
-      .setOrigin(1, 0.5)
-      .setInteractive({ useHandCursor: true });
-    this.menuContinueBtn.on('pointerdown', () => {
-      SoundFX.unlock();
-      this.events.emit('ui-button-clicked');
-      this.isInitialBootMenu = false;
-      this.openOnlyModal(null);
-    });
-
-    this.mainMenuContainer.add([scrim, bg, headerBg, title, subtitle, this.menuContinueBtn]);
-
-    // --- LEFT COLUMN: 10 Maps Grid + Selected Map Preview Card ---
-    const leftX = -460;
-    const colW = 456;
-    const colBgL = this.add.graphics();
-    colBgL.fillStyle(0x150e08, 0.92);
-    colBgL.fillRoundedRect(leftX, -198, colW, 404, 14);
-    colBgL.lineStyle(1.5, 0x5c3e26, 0.85);
-    colBgL.strokeRoundedRect(leftX, -198, colW, 404, 14);
-    this.mainMenuContainer.add(colBgL);
-
-    const mapTitle = this.add.text(leftX + 16, -184, '🗺️ Оберіть карту світу (10 карт)', {
-      fontSize: '14.5px',
-      fontStyle: 'bold',
-      color: '#fde68a',
-    });
-    this.mainMenuContainer.add(mapTitle);
-
-    MAP_PRESET_ORDER.forEach((mapId: MapPresetId, idx: number) => {
-      const preset = MAP_PRESETS[mapId];
-      const col = idx % 2;
-      const row = Math.floor(idx / 2);
-      const bx = leftX + 16 + col * 214;
-      const by = -154 + row * 40;
-
-      const card = this.add
-        .text(bx, by, preset.nameUk, {
-          fontSize: '12px',
-          color: '#e2e8f0',
-          backgroundColor: '#261a11',
-          padding: { x: 10, y: 8 },
-          fixedWidth: 206,
-        })
-        .setInteractive({ useHandCursor: true });
-      card.on('pointerdown', () => {
-        SoundFX.unlock();
-        this.events.emit('ui-button-clicked');
-        this.menuDraftConfig.mapId = mapId;
-        this.refreshMainMenuModal();
-      });
-      this.menuMapButtons.set(mapId, card);
-      this.mainMenuContainer.add(card);
-    });
-
-    // Selected Map Preview Card
-    const prevBg = this.add.graphics();
-    prevBg.fillStyle(0x23170e, 0.96);
-    prevBg.fillRoundedRect(leftX + 16, 56, 424, 136, 12);
-    prevBg.lineStyle(1.6, 0x38bdf8, 0.88);
-    prevBg.strokeRoundedRect(leftX + 16, 56, 424, 136, 12);
-    this.mainMenuContainer.add(prevBg);
-
-    this.menuPrevTitle = this.add.text(leftX + 30, 68, '', {
-      fontSize: '14px',
-      fontStyle: 'bold',
-      color: '#67e8f9',
-    });
-    this.menuPrevDesc = this.add.text(leftX + 30, 92, '', {
-      fontSize: '12px',
-      color: '#f5ebe0',
-      wordWrap: { width: 396 },
-    });
-    this.menuPrevStats = this.add.text(leftX + 30, 158, '', {
-      fontSize: '11px',
-      fontStyle: 'bold',
-      color: '#a7f3d0',
-    });
-    this.mainMenuContainer.add([this.menuPrevTitle, this.menuPrevDesc, this.menuPrevStats]);
-
-    // --- RIGHT COLUMN: Mode, Difficulty, Rivals, Fog, Music, Sounds ---
-    const rightX = 14;
-    const colRW = 446;
-    const colBgR = this.add.graphics();
-    colBgR.fillStyle(0x150e08, 0.92);
-    colBgR.fillRoundedRect(rightX, -198, colRW, 404, 14);
-    colBgR.lineStyle(1.5, 0x5c3e26, 0.85);
-    colBgR.strokeRoundedRect(rightX, -198, colRW, 404, 14);
-    this.mainMenuContainer.add(colBgR);
-
-    // 1. Game Mode
-    const modeLbl = this.add.text(rightX + 16, -184, '🎮 Режим гри:', {
-      fontSize: '14px',
-      fontStyle: 'bold',
-      color: '#fde68a',
-    });
-    this.mainMenuContainer.add(modeLbl);
-
-    const shortModeLabels: Record<GameMode, string> = {
-      sandbox: '🏖️ Пісочниця\n(пропуск сезону 1 кліком)',
-      survival: '🔥 Виживання\n(чесні 10-хв сезони)',
-    };
-    (['sandbox', 'survival'] as GameMode[]).forEach((m, idx) => {
-      const btn = this.add
-        .text(rightX + 16 + idx * 210, -156, shortModeLabels[m], {
-          fontSize: '12px',
-          fontStyle: 'bold',
-          color: '#cbd5e1',
-          backgroundColor: '#261a11',
-          padding: { x: 10, y: 8 },
-          fixedWidth: 202,
-          align: 'center',
-        })
-        .setInteractive({ useHandCursor: true });
-      btn.on('pointerdown', () => {
-        SoundFX.unlock();
-        this.events.emit('ui-button-clicked');
-        this.menuDraftConfig.mode = m;
-        this.refreshMainMenuModal();
-      });
-      this.menuModeButtons.set(m, btn);
-      this.mainMenuContainer.add(btn);
-    });
-
-    // 2. Difficulty
-    const diffLbl = this.add.text(rightX + 16, -86, '⚔️ Складність:', {
-      fontSize: '14px',
-      fontStyle: 'bold',
-      color: '#fde68a',
-    });
-    this.mainMenuContainer.add(diffLbl);
-
-    let nextDiffX = rightX + 16;
-    (['easy', 'normal', 'hard', 'primal'] as DifficultyLevel[]).forEach((d) => {
-      const btn = this.add
-        .text(nextDiffX, -60, DIFFICULTY_LABELS_UK[d], {
-          fontSize: '12px',
-          fontStyle: 'bold',
-          color: '#cbd5e1',
-          backgroundColor: '#261a11',
-          padding: { x: 12, y: 7 },
-        })
-        .setInteractive({ useHandCursor: true });
-      btn.on('pointerdown', () => {
-        SoundFX.unlock();
-        this.events.emit('ui-button-clicked');
-        this.menuDraftConfig.difficulty = d;
-        this.refreshMainMenuModal();
-      });
-      nextDiffX += btn.width + 10;
-      this.menuDiffButtons.set(d, btn);
-      this.mainMenuContainer.add(btn);
-    });
-
-    // 3. Rival Tribes & Fog of War
-    const rivLbl = this.add.text(rightX + 16, -12, '🏴 Сусідні племена:', {
-      fontSize: '14px',
-      fontStyle: 'bold',
-      color: '#fde68a',
-    });
-    this.mainMenuContainer.add(rivLbl);
-
-    ([0, 1, 2, 3] as const).forEach((cnt, idx) => {
-      const btn = this.add
-        .text(rightX + 16 + idx * 48, 14, `${cnt}`, {
-          fontSize: '13px',
-          fontStyle: 'bold',
-          color: '#cbd5e1',
-          backgroundColor: '#261a11',
-          padding: { x: 13, y: 7 },
-        })
-        .setInteractive({ useHandCursor: true });
-      btn.on('pointerdown', () => {
-        SoundFX.unlock();
-        this.events.emit('ui-button-clicked');
-        this.menuDraftConfig.rivalCount = cnt;
-        this.refreshMainMenuModal();
-      });
-      this.menuRivalButtons.set(cnt, btn);
-      this.mainMenuContainer.add(btn);
-    });
-
-    const fogLbl = this.add.text(rightX + 230, -12, '🌫️ Туман війни:', {
-      fontSize: '14px',
-      fontStyle: 'bold',
-      color: '#fde68a',
-    });
-    this.menuFogBtn = this.add
-      .text(rightX + 230, 14, '☀️ Вимкнено', {
-        fontSize: '12.5px',
-        fontStyle: 'bold',
-        color: '#cbd5e1',
-        backgroundColor: '#261a11',
-        padding: { x: 18, y: 7 },
-      })
-      .setInteractive({ useHandCursor: true });
-    this.menuFogBtn.on('pointerdown', () => {
-      SoundFX.unlock();
-      this.events.emit('ui-button-clicked');
-      this.menuDraftConfig.fogOfWar = !this.menuDraftConfig.fogOfWar;
-      if (!this.isInitialBootMenu) {
-        this.events.emit('toggle-fog');
-      }
-      this.refreshMainMenuModal();
-    });
-    this.mainMenuContainer.add([fogLbl, this.menuFogBtn]);
-
-    // 4. Music Track Selector (0..3)
-    const musLbl = this.add.text(rightX + 16, 62, '🎵 Фонова музика:', {
-      fontSize: '14px',
-      fontStyle: 'bold',
-      color: '#fde68a',
-    });
-    this.mainMenuContainer.add(musLbl);
-
-    const shortMusicLabels: Record<MusicTrackId, string> = {
-      0: '🔇 Вимк.',
-      1: '1. Вогонь',
-      2: '2. Вітер',
-      3: '3. Бубни',
-    };
-    let nextMusX = rightX + 16;
-    ([0, 1, 2, 3] as MusicTrackId[]).forEach((tr) => {
-      const btn = this.add
-        .text(nextMusX, 88, shortMusicLabels[tr] ?? MUSIC_TRACK_LABELS_UK[tr], {
-          fontSize: '12px',
-          fontStyle: 'bold',
-          color: '#cbd5e1',
-          backgroundColor: '#261a11',
-          padding: { x: 12, y: 7 },
-        })
-        .setInteractive({ useHandCursor: true });
-      btn.on('pointerdown', () => {
-        SoundFX.unlock();
-        this.events.emit('ui-button-clicked');
-        this.menuDraftConfig.musicTrack = tr;
-        this.events.emit('set-music-track', tr);
-        this.refreshMainMenuModal();
-      });
-      nextMusX += btn.width + 10;
-      this.menuMusicButtons.set(tr, btn);
-      this.mainMenuContainer.add(btn);
-    });
-
-    // 5. Ambient Nature/Animal Sounds
-    this.menuAmbBtn = this.add
-      .text(rightX + 16, 140, '🦌 Звуки природи та тварин: Увімкнено', {
-        fontSize: '12.5px',
-        fontStyle: 'bold',
-        color: '#86efac',
-        backgroundColor: '#261a11',
-        padding: { x: 12, y: 9 },
-        fixedWidth: 414,
-        align: 'center',
-      })
-      .setInteractive({ useHandCursor: true });
-    this.menuAmbBtn.on('pointerdown', () => {
-      SoundFX.unlock();
-      this.events.emit('ui-button-clicked');
-      this.menuDraftConfig.ambientSounds = !this.menuDraftConfig.ambientSounds;
-      this.events.emit('set-ambient-sounds', this.menuDraftConfig.ambientSounds);
-      this.refreshMainMenuModal();
-    });
-    this.mainMenuContainer.add(this.menuAmbBtn);
-
-    // --- BOTTOM FOOTER: Start & Saves Manager Buttons ---
-    this.menuStartBtn = this.add
-      .text(-155, 246, '▶️ ПОЧАТИ НОВУ ГРУ', {
-        fontSize: '15px',
-        fontStyle: 'bold',
-        color: '#fef08a',
-        backgroundColor: '#166534',
-        padding: { x: 28, y: 12 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    this.menuStartBtn.on('pointerdown', () => {
-      SoundFX.unlock();
-      this.events.emit('ui-button-clicked');
-      const cfg = this.menuDraftConfig;
-      const sameBootConfig =
-        this.isInitialBootMenu &&
-        cfg.mapId === this.latestConfig.mapId &&
-        cfg.rivalCount === this.latestConfig.rivalCount &&
-        cfg.difficulty === this.latestConfig.difficulty &&
-        cfg.mode === this.latestConfig.mode &&
-        cfg.fogOfWar === this.latestConfig.fogOfWar;
-
-      this.isInitialBootMenu = false;
-      this.openOnlyModal(null);
-      if (!sameBootConfig) {
-        this.events.emit('start-new-game', { ...this.menuDraftConfig });
-      }
-    });
-
-    this.menuSavesBtn = this.add
-      .text(175, 246, '📂 ЗБЕРЕЖЕННЯ (0/5)', {
-        fontSize: '14.5px',
-        fontStyle: 'bold',
-        color: '#67e8f9',
-        backgroundColor: '#1e3a5f',
-        padding: { x: 24, y: 12 },
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    this.menuSavesBtn.on('pointerdown', () => {
-      SoundFX.unlock();
-      this.events.emit('ui-button-clicked');
-      this.openSavesModal();
-    });
-
-    this.mainMenuContainer.add([this.menuStartBtn, this.menuSavesBtn]);
-
-    this.mainMenuContainer.setVisible(false);
-  }
-
-  private refreshMainMenuModal(): void {
-    this.menuContinueBtn.setVisible(!this.isInitialBootMenu);
-    const cfg = this.menuDraftConfig;
-
-    for (const [mapId, card] of this.menuMapButtons.entries()) {
-      const preset = MAP_PRESETS[mapId];
-      const active = cfg.mapId === mapId;
-      card
-        .setText(`${active ? '✅ ' : ''}${preset.nameUk}`)
-        .setFontStyle(active ? 'bold' : 'normal')
-        .setColor(active ? '#fef08a' : '#e2e8f0')
-        .setBackgroundColor(active ? '#1e3a5f' : '#261a11');
-    }
-
-    const selPreset = MAP_PRESETS[cfg.mapId];
-    this.menuPrevTitle.setText(`📍 ${selPreset.nameUk}`);
-    this.menuPrevDesc.setText(selPreset.descUk);
-    this.menuPrevStats.setText(
-      `📐 ${selPreset.worldW}×${selPreset.worldH}  •  🪨 Вічних скель: ${selPreset.infiniteQuarries}  •  🌳 Дерев: ~${selPreset.treeCount}`
-    );
-
-    for (const [m, btn] of this.menuModeButtons.entries()) {
-      const active = cfg.mode === m;
-      btn
-        .setColor(active ? '#fef08a' : '#cbd5e1')
-        .setBackgroundColor(active ? '#166534' : '#261a11');
-    }
-
-    for (const [d, btn] of this.menuDiffButtons.entries()) {
-      const active = cfg.difficulty === d;
-      btn
-        .setColor(active ? '#fef08a' : '#cbd5e1')
-        .setBackgroundColor(active ? '#7c2d12' : '#261a11');
-    }
-
-    for (const [cnt, btn] of this.menuRivalButtons.entries()) {
-      const active = cfg.rivalCount === cnt;
-      btn
-        .setColor(active ? '#fef08a' : '#cbd5e1')
-        .setBackgroundColor(active ? '#166534' : '#261a11');
-    }
-
-    this.menuFogBtn
-      .setText(cfg.fogOfWar ? '🌫️ Увімкнено' : '☀️ Вимкнено')
-      .setColor(cfg.fogOfWar ? '#86efac' : '#cbd5e1')
-      .setBackgroundColor(cfg.fogOfWar ? '#14532d' : '#261a11');
-
-    for (const [tr, btn] of this.menuMusicButtons.entries()) {
-      const active = cfg.musicTrack === tr;
-      btn
-        .setColor(active ? '#67e8f9' : '#cbd5e1')
-        .setBackgroundColor(active ? '#164e63' : '#261a11');
-    }
-
-    this.menuAmbBtn
-      .setText(
-        cfg.ambientSounds
-          ? '🦌 Звуки природи та тварин: Увімкнено'
-          : '🔇 Звуки природи та тварин: Вимкнено'
-      )
-      .setColor(cfg.ambientSounds ? '#86efac' : '#fca5a5');
-
-    this.menuStartBtn.setText(
-      this.isInitialBootMenu ? '▶️ ПОЧАТИ НОВУ ГРУ' : '🔄 НОВА ГРА З ЦИМИ НАЛАШТУВАННЯМИ'
-    );
-    const usedSlots = this.latestSavesList.filter(Boolean).length;
-    this.menuSavesBtn.setText(
-      this.isInitialBootMenu
-        ? `📂 ЗАВАНТАЖИТИ ЗБЕРЕЖЕННЯ (${usedSlots}/${MAX_SAVE_SLOTS})`
-        : `💾 ЗБЕРЕГТИ / ЗАВАНТАЖИТИ (${usedSlots}/${MAX_SAVE_SLOTS})`
-    );
-  }
-
   private openSavesModal(): void {
-    this.savesModalContainer.setVisible(true);
-    this.refreshSavesModal();
-  }
-
-  private createSavesModal(): void {
-    const w = 740;
-    const h = 470;
-    this.savesModalContainer = this.add.container(0, 0).setDepth(4990);
-
-    const scrim = this.add.rectangle(0, 0, 3200, 3200, 0x080503, 0.86).setInteractive();
-    scrim.on('pointerdown', () => this.events.emit('ui-button-clicked'));
-
-    const bg = this.add.graphics();
-    bg.fillStyle(0x21150d, 0.99);
-    bg.fillRoundedRect(-w / 2, -h / 2, w, h, 20);
-    bg.lineStyle(2.6, 0x38bdf8, 0.95);
-    bg.strokeRoundedRect(-w / 2, -h / 2, w, h, 20);
-
-    const title = this.add.text(
-      -w / 2 + 24,
-      -h / 2 + 16,
-      '💾 Керування збереженнями (5 слотів)',
-      {
-        fontSize: '18px',
-        fontStyle: 'bold',
-        color: '#ffe066',
-      }
-    );
-
-    const closeBtn = this.add
-      .text(w / 2 - 22, -h / 2 + 16, '✕ Закрити', {
-        fontSize: '13px',
-        fontStyle: 'bold',
-        color: '#fca5a5',
-        backgroundColor: '#3b1d14',
-        padding: { x: 10, y: 5 },
-      })
-      .setOrigin(1, 0)
-      .setInteractive({ useHandCursor: true });
-    closeBtn.on('pointerdown', () => {
-      SoundFX.unlock();
-      this.events.emit('ui-button-clicked');
-      this.savesModalContainer.setVisible(false);
+    this.buildModalContainer.setVisible(false);
+    this.techModalContainer.setVisible(false);
+    this.chronicleContainer.setVisible(false);
+    this.diplomacyModalContainer.setVisible(false);
+    this.rosterModalContainer.setVisible(false);
+    this.isMenuOpenState = true;
+    this.setHudVisible(false);
+    if (this.scene.get('GameScene')) {
+      this.scene.setVisible(false, 'GameScene');
+    }
+    this.events.emit('set-menu-open', true);
+    this.menuOverlay.open('saves', {
+      isInitialBoot: false,
+      returnToGameOnBack: true,
     });
-
-    this.savesModalContainer.add([scrim, bg, title, closeBtn]);
-
-    const rowW = w - 44;
-    const rowH = 68;
-    const startY = -h / 2 + 60;
-
-    for (let slot = 1; slot <= MAX_SAVE_SLOTS; slot++) {
-      const ry = startY + (slot - 1) * (rowH + 10);
-      const row = this.add.container(-rowW / 2, ry);
-
-      const rBg = this.add.graphics();
-      rBg.fillStyle(0x150e08, 0.95);
-      rBg.fillRoundedRect(0, 0, rowW, rowH, 12);
-      rBg.lineStyle(1.4, 0x6b4c30, 0.85);
-      rBg.strokeRoundedRect(0, 0, rowW, rowH, 12);
-
-      const titleText = this.add.text(16, 11, `Слот #${slot}`, {
-        fontSize: '14px',
-        fontStyle: 'bold',
-        color: '#fde68a',
-      });
-      const infoText = this.add.text(16, 36, 'Порожній слот', {
-        fontSize: '12px',
-        color: '#94a3b8',
-      });
-
-      const saveBtn = this.add
-        .text(rowW - 260, rowH / 2, '💾 Зберегти', {
-          fontSize: '12px',
-          fontStyle: 'bold',
-          color: '#67e8f9',
-          backgroundColor: '#1e3a5f',
-          padding: { x: 10, y: 7 },
-        })
-        .setOrigin(0.5)
-        .setInteractive({ useHandCursor: true });
-      saveBtn.on('pointerdown', () => {
-        if (this.isInitialBootMenu) return;
-        SoundFX.unlock();
-        this.events.emit('ui-button-clicked');
-        this.events.emit('save-game', slot);
-      });
-
-      const loadBtn = this.add
-        .text(rowW - 142, rowH / 2, '📂 Завантажити', {
-          fontSize: '12px',
-          fontStyle: 'bold',
-          color: '#fef08a',
-          backgroundColor: '#166534',
-          padding: { x: 10, y: 7 },
-        })
-        .setOrigin(0.5)
-        .setInteractive({ useHandCursor: true });
-      loadBtn.on('pointerdown', () => {
-        const summary = this.latestSavesList[slot - 1];
-        if (!summary) return;
-        SoundFX.unlock();
-        this.events.emit('ui-button-clicked');
-        this.isInitialBootMenu = false;
-        this.savesModalContainer.setVisible(false);
-        this.openOnlyModal(null);
-        this.events.emit('load-game', slot);
-      });
-
-      const deleteBtn = this.add
-        .text(rowW - 44, rowH / 2, '🗑️', {
-          fontSize: '13px',
-          fontStyle: 'bold',
-          color: '#fca5a5',
-          backgroundColor: '#451a1a',
-          padding: { x: 10, y: 6 },
-        })
-        .setOrigin(0.5)
-        .setInteractive({ useHandCursor: true });
-      deleteBtn.on('pointerdown', () => {
-        const summary = this.latestSavesList[slot - 1];
-        if (!summary) return;
-        SoundFX.unlock();
-        this.events.emit('ui-button-clicked');
-        this.events.emit('delete-save', slot);
-      });
-
-      row.add([rBg, titleText, infoText, saveBtn, loadBtn, deleteBtn]);
-      this.saveSlotRows.push({
-        slotId: slot,
-        titleText,
-        infoText,
-        saveBtn,
-        loadBtn,
-        deleteBtn,
-      });
-      this.savesModalContainer.add(row);
-    }
-
-    this.savesModalContainer.setVisible(false);
-  }
-
-  private refreshSavesModal(): void {
-    const canSaveCurrent = !this.isInitialBootMenu;
-    for (const row of this.saveSlotRows) {
-      const s = this.latestSavesList[row.slotId - 1] ?? null;
-      if (s) {
-        row.titleText
-          .setText(`💾 Слот #${row.slotId} — ${s.mapNameUk}`)
-          .setColor('#fde68a');
-        row.infoText
-          .setText(
-            `Рік ${s.year} • ${SEASON_ICONS[s.season]} ${s.seasonUk} • 👥 Населення: ${s.pop} • 🕒 ${s.dateStrUk}`
-          )
-          .setColor('#e2e8f0');
-        row.saveBtn.setText('💾 Перезапис').setVisible(canSaveCurrent);
-        row.loadBtn.setVisible(true);
-        row.deleteBtn.setVisible(true);
-      } else {
-        row.titleText
-          .setText(`📁 Слот #${row.slotId} — Порожній слот`)
-          .setColor('#94a3b8');
-        row.infoText
-          .setText(
-            canSaveCurrent
-              ? 'Натисніть «💾 Зберегти», щоб записати поточну гру в цей слот'
-              : 'Збережень у цьому слоті немає'
-          )
-          .setColor('#64748b');
-        row.saveBtn.setText('💾 Зберегти').setVisible(canSaveCurrent);
-        row.loadBtn.setVisible(false);
-        row.deleteBtn.setVisible(false);
-      }
-    }
   }
 
   private createChronicleModal(): void {
@@ -3180,55 +2792,111 @@ export class UIScene extends Phaser.Scene {
   }
 
   private createHint(): void {
-    const isTouch = this.sys.game.device.input.touch;
-    const msg = isTouch
-      ? 'Тап — вибрати • Вогнище — Оборона • Тотем — Знання'
-      : 'ЛКМ/Рамка — вибрати • ПКМ — наказ • Вогнище — Оборона • Тотем — Знання • WASD — камера';
+    this.hintText = this.add.text(
+      0,
+      0,
+      'ЛКМ/Рамка — вибрати • ПКМ — наказ • Вогнище — Оборона • Тотем — Знання • WASD — камера',
+      {
+        fontSize: '10.5px',
+        color: '#fff8e7',
+        backgroundColor: '#261a11cc',
+        padding: { x: 8, y: 3 },
+      }
+    );
+  }
 
-    this.hintText = this.add.text(0, 0, msg, {
-      fontSize: '10.5px',
-      color: '#fff8e7',
-      backgroundColor: '#261a11cc',
-      padding: { x: 8, y: 3 },
-    });
+  private syncQuickDockVisibility(): void {
+    if (this.isMenuOpenState) {
+      this.quickDockContainer.setVisible(false);
+      return;
+    }
+    const wideDesktop = this.scale.width >= 1180 && this.scale.height > 520;
+    const isPortrait = this.scale.width < 600 && this.scale.height >= this.scale.width;
+    const hideForContext =
+      !wideDesktop &&
+      !isPortrait &&
+      (this.buildingPanel.visible || this.campfirePanel.visible);
+    this.quickDockContainer.setVisible(!hideForContext);
   }
 
   private layoutUI(width: number, height: number): void {
-    const topMaxW = width >= 900 ? width - 210 : width - 16;
+    const isCompactLandscape = height <= 520 && width > height;
+    const isPortrait = width < 600 && height >= width;
+
+    const miniScale =
+      width >= 1050 && height >= 600
+        ? 1
+        : isCompactLandscape
+        ? Math.min(0.68, (height * 0.29) / 144)
+        : isPortrait
+        ? 0.54
+        : 0.78;
+
+    const rightReserve = isPortrait ? 12 : Math.round(this.minimapW * miniScale) + 18;
+    const topMaxW = Math.max(260, width - rightReserve - 12);
     const barScale = Math.min(1, topMaxW / this.baseBarWidth);
-    const barCenterOffset =
-      width >= 900
-        ? Math.round((width - 186 - this.baseBarWidth * barScale) / 2)
-        : Math.round((width - this.baseBarWidth * barScale) / 2);
-    this.topBarContainer.setScale(barScale).setPosition(Math.max(8, barCenterOffset), 8);
+    const barCenterOffset = isPortrait
+      ? Math.round((width - this.baseBarWidth * barScale) / 2)
+      : Math.round((width - rightReserve - this.baseBarWidth * barScale) / 2);
+    this.topBarContainer.setScale(barScale).setPosition(Math.max(8, barCenterOffset), 6);
 
     const topBarH = this.isStorageExpanded ? 68 : 38;
-    const calScale = Math.min(1, topMaxW / this.calendarBarWidth);
-    const calY = Math.round(8 + topBarH * barScale + 6);
-    const calX =
-      width >= 900
-        ? Math.round((width - 186 - this.calendarBarWidth * calScale) / 2)
-        : Math.round((width - this.calendarBarWidth * calScale) / 2);
+    const calScale = Math.min(barScale, topMaxW / this.calendarBarWidth);
+    const calY = Math.round(6 + topBarH * barScale + 4);
+    const calX = isPortrait
+      ? Math.round((width - this.calendarBarWidth * calScale) / 2)
+      : Math.round((width - rightReserve - this.calendarBarWidth * calScale) / 2);
     this.calendarContainer.setScale(calScale).setPosition(Math.max(8, calX), calY);
 
-    const miniScale = width >= 900 ? 1 : 0.72;
-    this.minimapContainer
-      .setScale(miniScale)
-      .setPosition(width - Math.round(this.minimapW * miniScale) - 10, 8);
+    const calBottom = calY + Math.round(38 * calScale);
+    const miniY = isPortrait ? calBottom + 6 : 6;
+    const miniW = Math.round(this.minimapW * miniScale);
+    const miniH = Math.round((this.minimapH + 22) * miniScale);
+    this.minimapContainer.setScale(miniScale).setPosition(width - miniW - 8, miniY);
 
-    const cardScale = Math.min(1, (width - 16) / this.cardWidth);
-    this.unitPanel
-      .setScale(cardScale)
-      .setPosition(14, height - Math.round(this.cardHeight * cardScale) - 14);
-    this.groupPanel
-      .setScale(cardScale)
-      .setPosition(14, height - Math.round(114 * cardScale) - 14);
-
-    const actionScale = Math.min(1, (width - 16) / this.actionBarWidth);
+    const minimapBottom = miniY + miniH;
+    const actionScale = isPortrait
+      ? Math.min(1, (width - 16) / this.actionBarWidth)
+      : Math.min(1, (width * 0.45) / this.actionBarWidth, isCompactLandscape ? 0.84 : 1);
     this.actionBarContainer.setScale(actionScale);
+    const actionH = Math.round(46 * actionScale);
+    const actionMarginBottom = width >= 1180 && !isCompactLandscape ? 22 : 8;
 
-    const dockScale = Math.min(1, (width - 16) / 362);
+    const ctrlMaxH = Math.max(112, height - minimapBottom - actionH - actionMarginBottom - 16);
+    const ctrlScale = Math.min(1, Math.max(0.62, ctrlMaxH / 208), isCompactLandscape ? 0.82 : 1);
+    const ctrlW = Math.round(44 * ctrlScale);
+    this.cameraControlsContainer
+      .setScale(ctrlScale)
+      .setPosition(width - ctrlW - 8, minimapBottom + 6);
+
+    const dockScale = isPortrait
+      ? Math.min(1, (width - 16) / 362)
+      : Math.min(1, (width * 0.45) / 362, isCompactLandscape ? 0.82 : 1);
     this.quickDockContainer.setScale(dockScale);
+    const dockH = Math.round(42 * dockScale);
+
+    const cardScale = isPortrait
+      ? Math.min(1, (width - 16) / this.cardWidth)
+      : Math.min(
+          1,
+          (width * 0.45) / this.cardWidth,
+          (height * (isCompactLandscape ? 0.45 : 0.42)) / this.cardHeight
+        );
+    this.unitPanel.setScale(cardScale);
+    this.groupPanel.setScale(cardScale);
+
+    const bPanelScale = isPortrait
+      ? Math.min(1, (width - 16) / this.buildingPanelW)
+      : Math.min(
+          1,
+          (width * 0.43) / this.buildingPanelW,
+          (height * (isCompactLandscape ? 0.44 : 0.42)) / this.buildingPanelH
+        );
+    this.buildingPanel.setScale(bPanelScale);
+    this.campfirePanel.setScale(bPanelScale);
+
+    const confirmScale = Math.min(1, (width - 20) / 420, isCompactLandscape ? 0.86 : 1);
+    this.buildConfirmContainer.setScale(confirmScale);
 
     const centerModals: Array<{
       c: Phaser.GameObjects.Container;
@@ -3239,68 +2907,110 @@ export class UIScene extends Phaser.Scene {
       { c: this.techModalContainer, mw: 680, mh: 448 },
       { c: this.chronicleContainer, mw: 560, mh: 400 },
       { c: this.diplomacyModalContainer, mw: 700, mh: 452 },
-      { c: this.mainMenuContainer, mw: 960, mh: 580 },
-      { c: this.savesModalContainer, mw: 740, mh: 472 },
       { c: this.rosterModalContainer, mw: 640, mh: 442 },
     ];
     for (const m of centerModals) {
       m.c
         .setPosition(Math.round(width / 2), Math.round(height / 2))
-        .setScale(Math.min(1, (width - 20) / m.mw, (height - 20) / m.mh));
+        .setScale(Math.min(1, (width - 16) / m.mw, (height - 16) / m.mh));
     }
 
-    if (width >= 1180) {
+    if (isPortrait) {
+      const actionY = height - actionH - 8;
       this.actionBarContainer.setPosition(
-        width - Math.round(this.actionBarWidth * actionScale) - 14,
-        height - Math.round(46 * actionScale) - 26
+        Math.round((width - Math.round(this.actionBarWidth * actionScale)) / 2),
+        actionY
       );
+      const dockY = actionY - dockH - 6;
       this.quickDockContainer.setPosition(
-        Math.round(this.cardWidth + 28),
-        height - Math.round(42 * dockScale) - 26
+        Math.round((width - Math.round(362 * dockScale)) / 2),
+        dockY
+      );
+      const panelBottom = dockY - 8;
+      this.unitPanel.setPosition(
+        Math.round((width - Math.round(this.cardWidth * cardScale)) / 2),
+        panelBottom - Math.round(this.cardHeight * cardScale)
+      );
+      this.groupPanel.setPosition(
+        Math.round((width - Math.round(368 * cardScale)) / 2),
+        panelBottom - Math.round(114 * cardScale)
       );
       this.buildingPanel.setPosition(
-        width - this.buildingPanelW - 14,
-        height - Math.round(46 * actionScale) - this.buildingPanelH - 36
+        Math.round((width - Math.round(this.buildingPanelW * bPanelScale)) / 2),
+        panelBottom - Math.round(this.buildingPanelH * bPanelScale)
       );
       this.campfirePanel.setPosition(
-        width - this.buildingPanelW - 14,
-        height - Math.round(46 * actionScale) - 142 - 36
+        Math.round((width - Math.round(this.buildingPanelW * bPanelScale)) / 2),
+        panelBottom - Math.round(132 * bPanelScale)
       );
-      this.hintText.setOrigin(1, 1).setPosition(width - 14, height - 4).setVisible(true);
-    } else if (width >= 820) {
-      this.actionBarContainer.setPosition(
-        width - Math.round(this.actionBarWidth * actionScale) - 12,
-        height - Math.round(46 * actionScale) - 24
-      );
-      this.quickDockContainer.setPosition(
-        width - Math.round(362 * dockScale) - 12,
-        height - Math.round(46 * actionScale) - Math.round(42 * dockScale) - 32
-      );
-      this.buildingPanel.setPosition(
-        width - this.buildingPanelW - 12,
-        height - 150 - this.buildingPanelH
-      );
-      this.campfirePanel.setPosition(width - this.buildingPanelW - 12, height - 150 - 142);
-      this.hintText.setOrigin(1, 1).setPosition(width - 12, height - 4).setVisible(true);
-    } else {
-      this.actionBarContainer.setPosition(
-        Math.round((width - this.actionBarWidth * actionScale) / 2),
-        calY + Math.round(38 * calScale) + 8
-      );
-      this.quickDockContainer.setPosition(
-        Math.round((width - 362 * dockScale) / 2),
-        calY + Math.round(38 * calScale) + Math.round(46 * actionScale) + 14
-      );
-      this.buildingPanel.setPosition(
-        Math.round((width - this.buildingPanelW * 0.85) / 2),
-        height - Math.round(this.cardHeight * cardScale) - this.buildingPanelH - 20
-      );
-      this.campfirePanel.setPosition(
-        Math.round((width - this.buildingPanelW * 0.85) / 2),
-        height - Math.round(this.cardHeight * cardScale) - 152
+      this.buildConfirmContainer.setPosition(
+        Math.round(width / 2),
+        dockY - Math.round(28 * confirmScale) - 6
       );
       this.hintText.setVisible(false);
+    } else if (width >= 1180 && !isCompactLandscape) {
+      const actionY = height - actionH - actionMarginBottom;
+      this.actionBarContainer.setPosition(
+        width - Math.round(this.actionBarWidth * actionScale) - 14,
+        actionY
+      );
+      this.unitPanel.setPosition(14, height - Math.round(this.cardHeight * cardScale) - 14);
+      this.groupPanel.setPosition(14, height - Math.round(114 * cardScale) - 14);
+      this.quickDockContainer.setPosition(
+        Math.round(this.cardWidth * cardScale + 26),
+        height - dockH - actionMarginBottom
+      );
+      this.buildingPanel.setPosition(
+        width - Math.round(this.buildingPanelW * bPanelScale) - 14,
+        actionY - Math.round(this.buildingPanelH * bPanelScale) - 10
+      );
+      this.campfirePanel.setPosition(
+        width - Math.round(this.buildingPanelW * bPanelScale) - 14,
+        actionY - Math.round(132 * bPanelScale) - 10
+      );
+      this.buildConfirmContainer.setPosition(
+        Math.round(width / 2),
+        height - dockH - actionMarginBottom - Math.round(32 * confirmScale) - 12
+      );
+      const showDesktopHint =
+        width >= 1024 && !this.sys.game.device.input.touch && !this.isMenuOpenState;
+      this.hintText.setOrigin(1, 1).setPosition(width - 14, height - 4).setVisible(showDesktopHint);
+    } else {
+      const actionW = Math.round(this.actionBarWidth * actionScale);
+      const actionY = height - actionH - 8;
+      this.actionBarContainer.setPosition(width - actionW - 8, actionY);
+      this.unitPanel.setPosition(8, height - Math.round(this.cardHeight * cardScale) - 8);
+      this.groupPanel.setPosition(8, height - Math.round(114 * cardScale) - 8);
+
+      const dockW = Math.round(362 * dockScale);
+      this.quickDockContainer.setPosition(width - dockW - 8, actionY - dockH - 6);
+
+      const rightEdgeForPanels = width - ctrlW - 14;
+      const bW = Math.round(this.buildingPanelW * bPanelScale);
+      this.buildingPanel.setPosition(
+        rightEdgeForPanels - bW,
+        actionY - Math.round(this.buildingPanelH * bPanelScale) - 8
+      );
+      this.campfirePanel.setPosition(
+        rightEdgeForPanels - bW,
+        actionY - Math.round(132 * bPanelScale) - 8
+      );
+
+      if (isCompactLandscape) {
+        this.buildConfirmContainer.setPosition(
+          Math.max(216, Math.round((width - rightReserve) / 2)),
+          calBottom + Math.round(26 * confirmScale) + 6
+        );
+      } else {
+        this.buildConfirmContainer.setPosition(
+          Math.round(width / 2),
+          actionY - dockH - Math.round(28 * confirmScale) - 14
+        );
+      }
+      this.hintText.setVisible(false);
     }
+
+    this.syncQuickDockVisibility();
   }
 
   private refreshResourceTexts(): void {

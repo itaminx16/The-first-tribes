@@ -92,6 +92,7 @@ export interface VillagerCallbacks {
   getObstacles: () => ObstacleCircle[];
   getRiver: () => River | null;
   getStoragePoint: (type: ResourceType) => { x: number; y: number };
+  getActiveGranary: () => TribeBuilding | null;
   isStorageFull: (type: ResourceType) => boolean;
   hasFoodInStorage: () => boolean;
   consumeStorageFood: () => boolean;
@@ -3886,7 +3887,8 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
   private handleReturning(dt: number): void {
     this.clearProgressBar();
     const dropType: ResourceType = this.carrying ?? this.lastResourceType ?? 'wood';
-    const dropPoint = this.callbacks.getStoragePoint(dropType);
+    const granary = this.callbacks.getActiveGranary();
+    const dropPoint = granary ? granary.getWorkSpot() : this.callbacks.getStoragePoint(dropType);
 
     const inWater = Boolean(
       this.targetLake && this.targetLake.isPointInsideClickArea(this.x, this.y)
@@ -3894,15 +3896,19 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     this.setWadingVisual(inWater);
 
     const dist = Phaser.Math.Distance.Between(this.x, this.y, dropPoint.x, dropPoint.y);
+    const distCenter = granary
+      ? Phaser.Math.Distance.Between(this.x, this.y, granary.x, granary.y)
+      : dist;
     const arrived =
-      dist <= 48 ||
+      dist <= 52 ||
+      (granary !== null && distCenter <= 68) ||
       this.moveToward(
         dropPoint.x,
         dropPoint.y,
         dt,
-        32,
+        34,
         inWater ? 0.85 : 1,
-        inWater ? this.targetLake ?? undefined : undefined
+        inWater ? this.targetLake ?? undefined : granary ?? undefined
       );
 
     if (arrived) {
@@ -4033,9 +4039,16 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
       return;
     }
 
-    const foodDepot = this.callbacks.getStoragePoint('food');
+    const granary = this.callbacks.getActiveGranary();
+    const foodDepot = granary ? granary.getWorkSpot() : this.callbacks.getStoragePoint('food');
     const dist = Phaser.Math.Distance.Between(this.x, this.y, foodDepot.x, foodDepot.y);
-    const arrived = dist <= 46 || this.moveToward(foodDepot.x, foodDepot.y, dt, 32);
+    const distCenter = granary
+      ? Phaser.Math.Distance.Between(this.x, this.y, granary.x, granary.y)
+      : dist;
+    const arrived =
+      dist <= 52 ||
+      (granary !== null && distCenter <= 68) ||
+      this.moveToward(foodDepot.x, foodDepot.y, dt, 34, 1, granary ?? undefined);
     if (arrived) {
       this.resetPose();
       this.actionTimer = 0;

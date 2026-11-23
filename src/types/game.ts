@@ -768,6 +768,7 @@ export interface ObstacleCircle {
   y: number;
   radius: number;
   owner?: object;
+  softBypassable?: boolean;
 }
 
 export interface PopulationState {

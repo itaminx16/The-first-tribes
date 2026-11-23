@@ -11,6 +11,7 @@ export interface NavigationAgentState {
   stuckAnchorX: number;
   stuckAnchorY: number;
   stuckCount: number;
+  bypassObstaclesMs: number;
 }
 
 export function createNavAgentState(x: number, y: number, seed = 0): NavigationAgentState {
@@ -24,6 +25,7 @@ export function createNavAgentState(x: number, y: number, seed = 0): NavigationA
     stuckAnchorX: x,
     stuckAnchorY: y,
     stuckCount: 0,
+    bypassObstaclesMs: 0,
   };
 }
 
@@ -33,6 +35,7 @@ export function resetNavAgentState(nav: NavigationAgentState, x: number, y: numb
   nav.stuckAnchorX = x;
   nav.stuckAnchorY = y;
   nav.stuckCount = 0;
+  nav.bypassObstaclesMs = 0;
 }
 
 export function resolveRiverCrossingGoal(
@@ -317,6 +320,7 @@ export function stepSmartMove(
 
   const dtMs = dt * 1000;
   nav.repathCooldownMs = Math.max(0, nav.repathCooldownMs - dtMs);
+  nav.bypassObstaclesMs = Math.max(0, nav.bypassObstaclesMs - dtMs);
 
   // Clear stale waypoints if final goal shifted significantly
   if (Math.hypot(tx - nav.lastGoalX, ty - nav.lastGoalY) > 65) {
@@ -353,7 +357,10 @@ export function stepSmartMove(
       if (nav.stuckCount % 2 === 1) {
         nav.avoidSideSign = nav.avoidSideSign === 1 ? -1 : 1;
       }
-      if (nav.repathCooldownMs <= 0) {
+      if (nav.stuckCount >= 3 && nav.bypassObstaclesMs <= 0) {
+        nav.bypassObstaclesMs = 1800;
+        nav.waypoints = [];
+      } else if (nav.repathCooldownMs <= 0 && nav.bypassObstaclesMs <= 0) {
         nav.waypoints = computeLocalAStarPath(
           x,
           y,
@@ -383,10 +390,12 @@ export function stepSmartMove(
   const desiredAngle = Math.atan2(dirY, dirX);
 
   // Gather nearby obstacles within lookahead range
+  const bypassing = nav.bypassObstaclesMs > 0;
   const localObs: ObstacleCircle[] = [];
   for (let i = 0; i < obstacles.length; i++) {
     const obs = obstacles[i];
     if (ignoreOwner && obs.owner === ignoreOwner) continue;
+    if (bypassing && obs.softBypassable) continue;
     const ox = x - obs.x;
     const oy = y - obs.y;
     const maxR = obs.radius + 135;

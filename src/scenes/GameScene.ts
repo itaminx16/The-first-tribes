@@ -3087,6 +3087,14 @@ export class GameScene extends Phaser.Scene {
         }
         return this.storages[type].getDropPoint();
       },
+      getActiveGranary: () => {
+        if (!this.campfireStoragesHidden) return null;
+        return (
+          this.buildings.find(
+            (b) => b.scene && b.buildingType === 'granary' && b.isComplete()
+          ) ?? null
+        );
+      },
       isStorageFull: (type: ResourceType) => this.resources[type] >= this.storageCap,
       hasFoodInStorage: () => this.resources.food > 0,
       consumeStorageFood: () => {
@@ -3222,7 +3230,13 @@ export class GameScene extends Phaser.Scene {
 
   private rebuildObstacleCache(): void {
     const obstacles: ObstacleCircle[] = [
-      { x: this.campfire.x, y: this.campfire.y + 4, radius: 56, owner: this.campfire },
+      {
+        x: this.campfire.x,
+        y: this.campfire.y + 4,
+        radius: 44,
+        owner: this.campfire,
+        softBypassable: true
+      },
       { x: this.lake.x - 56, y: this.lake.y, radius: 78, owner: this.lake },
       { x: this.lake.x, y: this.lake.y, radius: 90, owner: this.lake },
       { x: this.lake.x + 56, y: this.lake.y, radius: 78, owner: this.lake }
@@ -3231,14 +3245,14 @@ export class GameScene extends Phaser.Scene {
     for (const node of this.resourceNodes) {
       if (!node.scene || node.isDepleted()) continue;
       if (node.resourceType === 'wood') {
-        obstacles.push({ x: node.x, y: node.y, radius: 24, owner: node });
+        obstacles.push({ x: node.x, y: node.y, radius: 22, owner: node, softBypassable: true });
       } else if (node.resourceType === 'stone') {
-        obstacles.push({ x: node.x, y: node.y, radius: 28, owner: node });
+        obstacles.push({ x: node.x, y: node.y, radius: 26, owner: node, softBypassable: true });
       }
     }
 
     for (const hut of this.huts) {
-      obstacles.push({ x: hut.x, y: hut.y + 4, radius: 46, owner: hut });
+      obstacles.push({ x: hut.x, y: hut.y + 4, radius: 38, owner: hut, softBypassable: true });
     }
 
     for (const b of this.buildings) {
@@ -3246,8 +3260,9 @@ export class GameScene extends Phaser.Scene {
       obstacles.push({
         x: b.x,
         y: b.y + 4,
-        radius: b.buildingType === 'palisade' ? 30 : 46,
-        owner: b
+        radius: b.buildingType === 'palisade' ? 26 : 38,
+        owner: b,
+        softBypassable: b.buildingType !== 'palisade'
       });
     }
 

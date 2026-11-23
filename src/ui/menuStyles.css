@@ -104,6 +104,7 @@
   align-items: center;
   justify-content: center;
   gap: 10px;
+  text-decoration: none;
   transition: transform 0.08s ease, background-color 0.14s ease, border-color 0.14s ease;
   touch-action: manipulation;
 }
@@ -266,6 +267,10 @@
   cursor: pointer;
   touch-action: manipulation;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
 }
 
 .ft-back-btn:hover {
@@ -563,6 +568,10 @@
   cursor: pointer;
   touch-action: manipulation;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
 }
 
 .ft-sm-btn.load {

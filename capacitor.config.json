@@ -1,0 +1,11 @@
+{
+  "appId": "com.itaminx16.firsttribes",
+  "appName": "Первісні Племена",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "backgroundColor": "#110a06"
+  }
+}

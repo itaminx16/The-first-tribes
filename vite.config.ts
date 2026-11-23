@@ -9,6 +9,10 @@ const pkgJson = JSON.parse(
   fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')
 ) as { version?: string };
 const appVersion = pkgJson.version ?? '0.1.0';
+const buildId = process.env.GITHUB_RUN_NUMBER
+  ? `gh-${process.env.GITHUB_RUN_NUMBER}`
+  : `local-${Date.now().toString(36)}`;
+const apkDownloadUrl = 'https://itaminx16.github.io/The-first-tribes/FirstTribes.apk';
 
 function collectDistFiles(dir: string, rootDir: string): string[] {
   const results: string[] = [];
@@ -21,7 +25,14 @@ function collectDistFiles(dir: string, rootDir: string): string[] {
       results.push(...collectDistFiles(fullPath, rootDir));
     } else if (entry.isFile()) {
       const rel = path.relative(rootDir, fullPath).split(path.sep).join('/');
-      if (rel === 'sw.js' || rel.endsWith('.map')) continue;
+      if (
+        rel === 'sw.js' ||
+        rel === 'version.json' ||
+        rel === 'FirstTribes.apk' ||
+        rel.endsWith('.map')
+      ) {
+        continue;
+      }
       results.push(rel);
     }
   }
@@ -176,6 +187,13 @@ self.addEventListener('fetch', (event) => {
 `;
 
       fs.writeFileSync(path.join(distDir, 'sw.js'), swSource, 'utf8');
+
+      // Write fresh version manifest for in-APK update checks (excluded from SW precache)
+      fs.writeFileSync(
+        path.join(distDir, 'version.json'),
+        `${JSON.stringify({ version, buildId, apkUrl: apkDownloadUrl }, null, 2)}\n`,
+        'utf8'
+      );
     }
   };
 }
@@ -183,7 +201,8 @@ self.addEventListener('fetch', (event) => {
 export default defineConfig({
   base: './',
   define: {
-    __APP_VERSION__: JSON.stringify(appVersion)
+    __APP_VERSION__: JSON.stringify(appVersion),
+    __BUILD_ID__: JSON.stringify(buildId)
   },
   server: {
     port: 5173,

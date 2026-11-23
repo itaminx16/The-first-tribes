@@ -59,7 +59,6 @@ export class MainMenuOverlay {
   private draftConfig: GameSetupConfig = { ...DEFAULT_GAME_SETUP };
   private saves: Array<SaveSummary | null> = [];
   private pendingDeleteSlot: number | null = null;
-  private installGuideOpen = false;
   private toastDismissed = false;
   private rotateDismissed = false;
   private pwaState: PwaState = pwaManager.getState();
@@ -137,7 +136,6 @@ export class MainMenuOverlay {
     this.isOpen = true;
     this.view = view;
     this.pendingDeleteSlot = null;
-    this.installGuideOpen = false;
     if (opts?.isInitialBoot !== undefined) {
       this.isInitialBoot = opts.isInitialBoot;
     }
@@ -151,7 +149,6 @@ export class MainMenuOverlay {
   public close(): void {
     this.isOpen = false;
     this.pendingDeleteSlot = null;
-    this.installGuideOpen = false;
     this.root.hidden = true;
     this.renderRotateHint();
   }
@@ -219,36 +216,26 @@ export class MainMenuOverlay {
       `;
     }
 
-    const installBtnHtml = !this.pwaState.isInstalled
+    const apkBtnHtml = !this.pwaState.isNativeApk
       ? `
-        <button class="ft-btn ft-btn-install" data-action="install-app" type="button">
-          <span>📲 Встановити на пристрій (Офлайн)</span>
-        </button>
+        <a class="ft-btn ft-btn-install" href="${escapeHtml(this.pwaState.apkUrl)}" download="FirstTribes.apk">
+          <span>🤖 Завантажити APK для Android (Офлайн)</span>
+        </a>
       `
       : '';
 
-    const installGuideHtml =
-      this.installGuideOpen && !this.pwaState.isInstalled
-        ? `
-          <div class="ft-install-guide">
-            <strong>Як встановити на Android для гри офлайн:</strong>
-            <ol>
-              <li>Натисніть меню браузера <strong>⋮</strong> у правому верхньому куті Chrome.</li>
-              <li>Оберіть <strong>«Встановити додаток»</strong> або <strong>«Додати на головний екран»</strong>.</li>
-              <li>Відкривайте іконку з робочого столу — гра працюватиме на весь екран без інтернету й автоматично оновлюватиметься!</li>
-            </ol>
-          </div>
-        `
-        : '';
-
     const netPill = this.pwaState.isOffline
       ? '<span class="ft-status-pill offline">📴 Офлайн-режим</span>'
+      : this.pwaState.isNativeApk
+      ? '<span class="ft-status-pill ready">✅ Офлайн додаток</span>'
       : this.pwaState.offlineReady
       ? '<span class="ft-status-pill ready">✅ Офлайн готово</span>'
       : '<span class="ft-status-pill">📶 Онлайн</span>';
 
     const updateBtn = this.pwaState.updateAvailable
-      ? '<button class="ft-toast-btn" data-action="apply-update" type="button">🔄 Оновити гру</button>'
+      ? `<button class="ft-toast-btn" data-action="apply-update" type="button">${
+          this.pwaState.isNativeApk ? '🔄 Оновити APK' : '🔄 Оновити гру'
+        }</button>`
       : '';
 
     this.root.innerHTML = `
@@ -276,10 +263,8 @@ export class MainMenuOverlay {
           <button class="ft-btn" data-nav="settings" type="button">
             <span>⚙️ Налаштування</span>
           </button>
-          ${installBtnHtml}
+          ${apkBtnHtml}
         </div>
-
-        ${installGuideHtml}
 
         <div class="ft-home-footer">
           <span>v${escapeHtml(version)}</span>
@@ -318,15 +303,6 @@ export class MainMenuOverlay {
         this.pendingDeleteSlot = null;
         this.render();
       });
-    });
-
-    this.root.querySelector('[data-action="install-app"]')?.addEventListener('click', async () => {
-      SoundFX.unlock();
-      const outcome = await pwaManager.promptInstall();
-      if (outcome === 'unavailable') {
-        this.installGuideOpen = !this.installGuideOpen;
-        this.render();
-      }
     });
 
     this.root.querySelector('[data-action="apply-update"]')?.addEventListener('click', () => {
@@ -651,32 +627,32 @@ export class MainMenuOverlay {
       )
       .join('');
 
-    const offlineStatusText = this.pwaState.isInstalled
+    const offlineStatusText = this.pwaState.isNativeApk
+      ? 'Android APK встановлено — гра працює повністю офлайн.'
+      : this.pwaState.isInstalled
       ? 'Додаток встановлено на пристрій (автономний режим).'
       : this.pwaState.offlineReady
       ? 'Файли гри закешовані — гра працює навіть без інтернету.'
-      : 'Готово до кешування після встановлення або відкриття в мережі.';
+      : 'Готово до кешування після відкриття в мережі.';
 
-    const installBtnHtml = !this.pwaState.isInstalled
-      ? `<button class="ft-sm-btn save" data-action="settings-install" type="button">📲 Встановити додаток</button>`
+    const apkSettingsBtnHtml = !this.pwaState.isNativeApk
+      ? `<a class="ft-sm-btn save" href="${escapeHtml(this.pwaState.apkUrl)}" download="FirstTribes.apk">🤖 Завантажити APK для Android</a>`
       : '';
+
+    const desktopInstallBtnHtml =
+      this.pwaState.canInstall && !this.pwaState.isInstalled && !this.pwaState.isNativeApk
+        ? `<button class="ft-sm-btn neutral" data-action="settings-install" type="button">💻 Встановити на ПК (PWA)</button>`
+        : '';
 
     const updateBtnHtml = this.pwaState.updateAvailable
-      ? `<button class="ft-sm-btn load" data-action="settings-apply-update" type="button">✨ Оновити зараз</button>`
+      ? `<button class="ft-sm-btn load" data-action="settings-apply-update" type="button">✨ ${
+          this.pwaState.isNativeApk ? 'Завантажити оновлення APK' : 'Оновити зараз'
+        }</button>`
       : '';
 
-    const installGuideHtml =
-      this.installGuideOpen && !this.pwaState.isInstalled
-        ? `
-          <div class="ft-install-guide">
-            <strong>Ручне встановлення в Chrome на Android:</strong>
-            <ol>
-              <li>Натисніть <strong>⋮</strong> у правому верхньому куті браузера.</li>
-              <li>Оберіть <strong>«Встановити додаток»</strong> або <strong>«Додати на головний екран»</strong>.</li>
-            </ol>
-          </div>
-        `
-        : '';
+    const apkTipHtml = !this.pwaState.isNativeApk
+      ? `<div class="ft-setting-note">Відкрийте завантажений файл <strong>FirstTribes.apk</strong> на Android і підтвердіть встановлення — гра працює 100% офлайн і сама повідомить про нові оновлення!</div>`
+      : '';
 
     this.root.innerHTML = `
       <div class="ft-panel">
@@ -737,7 +713,8 @@ export class MainMenuOverlay {
                 ${this.pwaState.statusNoteUk ? `<br/><strong>${escapeHtml(this.pwaState.statusNoteUk)}</strong>` : ''}
               </div>
               <div class="ft-save-actions">
-                ${installBtnHtml}
+                ${apkSettingsBtnHtml}
+                ${desktopInstallBtnHtml}
                 <button class="ft-sm-btn neutral" data-action="check-updates" type="button" ${
                   this.pwaState.checkingUpdate ? 'disabled' : ''
                 }>
@@ -745,7 +722,7 @@ export class MainMenuOverlay {
                 </button>
                 ${updateBtnHtml}
               </div>
-              ${installGuideHtml}
+              ${apkTipHtml}
             </div>
           </section>
 
@@ -812,11 +789,7 @@ export class MainMenuOverlay {
 
     this.root.querySelector('[data-action="settings-install"]')?.addEventListener('click', async () => {
       SoundFX.unlock();
-      const outcome = await pwaManager.promptInstall();
-      if (outcome === 'unavailable') {
-        this.installGuideOpen = !this.installGuideOpen;
-        this.render();
-      }
+      await pwaManager.promptInstall();
     });
 
     this.root.querySelector('[data-action="check-updates"]')?.addEventListener('click', () => {
@@ -836,7 +809,7 @@ export class MainMenuOverlay {
 
     this.toastEl.hidden = false;
     this.toastEl.innerHTML = `
-      <span>✨ Доступне оновлення гри!</span>
+      <span>✨ ${this.pwaState.isNativeApk ? 'Доступне оновлення APK!' : 'Доступне оновлення гри!'}</span>
       <button class="ft-toast-btn" data-toast-update type="button">Оновити</button>
       <button class="ft-toast-close" data-toast-close type="button" aria-label="Закрити">✕</button>
     `;

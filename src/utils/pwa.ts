@@ -1,10 +1,13 @@
 export interface PwaState {
   canInstall: boolean;
   isInstalled: boolean;
+  isNativeApk: boolean;
   isOffline: boolean;
   offlineReady: boolean;
   updateAvailable: boolean;
   checkingUpdate: boolean;
+  buildId: string;
+  apkUrl: string;
   statusNoteUk: string;
 }
 
@@ -13,7 +16,16 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
 }
 
+interface RemoteVersionPayload {
+  version?: string;
+  buildId?: string;
+  apkUrl?: string;
+}
+
 type PwaListener = (state: PwaState) => void;
+
+const REMOTE_VERSION_URL = 'https://itaminx16.github.io/The-first-tribes/version.json';
+const APK_DOWNLOAD_URL = 'https://itaminx16.github.io/The-first-tribes/FirstTribes.apk';
 
 class PwaManager {
   private deferredPrompt: BeforeInstallPromptEvent | null = null;
@@ -25,10 +37,13 @@ class PwaManager {
   private state: PwaState = {
     canInstall: false,
     isInstalled: false,
+    isNativeApk: false,
     isOffline: typeof navigator !== 'undefined' ? !navigator.onLine : false,
     offlineReady: false,
     updateAvailable: false,
     checkingUpdate: false,
+    buildId: typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : 'dev',
+    apkUrl: APK_DOWNLOAD_URL,
     statusNoteUk: ''
   };
 
@@ -36,8 +51,41 @@ class PwaManager {
     if (this.initialized || typeof window === 'undefined') return;
     this.initialized = true;
 
-    this.state.isInstalled = this.detectStandalone();
-    this.state.isOffline = !navigator.onLine;
+    const isNativeApk = this.detectNativeCapacitor();
+    const isInstalled = isNativeApk || this.detectStandalone();
+
+    this.state = {
+      ...this.state,
+      isNativeApk,
+      isInstalled,
+      offlineReady: isNativeApk,
+      canInstall: false,
+      buildId: this.getBuildId(),
+      apkUrl: APK_DOWNLOAD_URL,
+      isOffline: !navigator.onLine
+    };
+
+    window.addEventListener('online', () => {
+      this.patchState({ isOffline: false });
+      void this.silentBackgroundUpdateCheck();
+    });
+
+    window.addEventListener('offline', () => {
+      this.patchState({ isOffline: true });
+    });
+
+    if (isNativeApk) {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          void this.checkRemoteApkVersion(true);
+        }
+      });
+      this.updateIntervalId = window.setInterval(() => {
+        void this.checkRemoteApkVersion(true);
+      }, 600_000);
+      void this.checkRemoteApkVersion(true);
+      return;
+    }
 
     window.addEventListener('beforeinstallprompt', (ev: Event) => {
       ev.preventDefault();
@@ -54,15 +102,6 @@ class PwaManager {
         canInstall: false,
         statusNoteUk: 'Додаток встановлено на пристрій!'
       });
-    });
-
-    window.addEventListener('online', () => {
-      this.patchState({ isOffline: false });
-      void this.silentBackgroundUpdateCheck();
-    });
-
-    window.addEventListener('offline', () => {
-      this.patchState({ isOffline: true });
     });
 
     if ('serviceWorker' in navigator) {
@@ -87,6 +126,10 @@ class PwaManager {
     return typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.0';
   }
 
+  public getBuildId(): string {
+    return typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : 'dev';
+  }
+
   public subscribe(listener: PwaListener): () => void {
     this.listeners.add(listener);
     listener(this.getState());
@@ -96,7 +139,7 @@ class PwaManager {
   }
 
   public async promptInstall(): Promise<'accepted' | 'dismissed' | 'unavailable'> {
-    if (!this.deferredPrompt) {
+    if (!this.deferredPrompt || this.state.isNativeApk) {
       return 'unavailable';
     }
     try {
@@ -124,6 +167,11 @@ class PwaManager {
       this.patchState({ statusNoteUk: 'Немає інтернету для перевірки оновлень.' });
       return 'offline';
     }
+
+    if (this.state.isNativeApk) {
+      return this.checkRemoteApkVersion(false);
+    }
+
     if (!('serviceWorker' in navigator) || !this.registration) {
       const note = import.meta.env.DEV
         ? 'Режим розробки — оновлення перевіряються у зібраній версії.'
@@ -166,6 +214,17 @@ class PwaManager {
   }
 
   public applyUpdate(): void {
+    if (this.state.isNativeApk) {
+      const link = document.createElement('a');
+      link.href = this.state.apkUrl;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      return;
+    }
+
     const waiting = this.registration?.waiting;
     if (waiting) {
       waiting.postMessage({ type: 'SKIP_WAITING' });
@@ -195,6 +254,13 @@ class PwaManager {
     }
   }
 
+  private detectNativeCapacitor(): boolean {
+    if (typeof window === 'undefined') return false;
+    const cap = (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } })
+      .Capacitor;
+    return Boolean(cap?.isNativePlatform?.());
+  }
+
   private detectStandalone(): boolean {
     if (typeof window === 'undefined') return false;
     const standaloneNav = (navigator as Navigator & { standalone?: boolean }).standalone;
@@ -203,6 +269,69 @@ class PwaManager {
       window.matchMedia('(display-mode: fullscreen)').matches ||
       Boolean(standaloneNav)
     );
+  }
+
+  private async checkRemoteApkVersion(
+    silent: boolean
+  ): Promise<'updated' | 'up-to-date' | 'offline' | 'unsupported'> {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      if (!silent) {
+        this.patchState({ statusNoteUk: 'Немає інтернету для перевірки оновлень.' });
+      }
+      return 'offline';
+    }
+
+    if (!silent) {
+      this.patchState({ checkingUpdate: true, statusNoteUk: 'Перевірка оновлень...' });
+    }
+
+    try {
+      const res = await fetch(`${REMOTE_VERSION_URL}?t=${Date.now()}`, {
+        cache: 'no-store'
+      });
+      if (!res.ok) {
+        if (!silent) {
+          this.patchState({
+            checkingUpdate: false,
+            statusNoteUk: 'Не вдалося перевірити оновлення.'
+          });
+        }
+        return 'unsupported';
+      }
+
+      const data = (await res.json()) as RemoteVersionPayload;
+      const nextApkUrl =
+        typeof data.apkUrl === 'string' && data.apkUrl.length > 0
+          ? data.apkUrl
+          : APK_DOWNLOAD_URL;
+      const remoteBuild = typeof data.buildId === 'string' ? data.buildId : '';
+      const hasUpdate = remoteBuild.startsWith('gh-') && remoteBuild !== this.getBuildId();
+
+      if (hasUpdate) {
+        this.patchState({
+          checkingUpdate: false,
+          updateAvailable: true,
+          apkUrl: nextApkUrl,
+          statusNoteUk: 'Вийшла нова версія APK! Натисніть «Оновити» для завантаження.'
+        });
+        return 'updated';
+      }
+
+      this.patchState({
+        checkingUpdate: false,
+        apkUrl: nextApkUrl,
+        ...(silent ? {} : { statusNoteUk: 'У вас найновіша версія гри.' })
+      });
+      return 'up-to-date';
+    } catch {
+      if (!silent) {
+        this.patchState({
+          checkingUpdate: false,
+          statusNoteUk: 'Не вдалося перевірити оновлення.'
+        });
+      }
+      return 'unsupported';
+    }
   }
 
   private async registerServiceWorker(): Promise<void> {
@@ -266,7 +395,12 @@ class PwaManager {
   }
 
   private async silentBackgroundUpdateCheck(): Promise<void> {
-    if (!this.registration || !navigator.onLine) return;
+    if (!navigator.onLine) return;
+    if (this.state.isNativeApk) {
+      await this.checkRemoteApkVersion(true);
+      return;
+    }
+    if (!this.registration) return;
     try {
       await this.registration.update();
     } catch {

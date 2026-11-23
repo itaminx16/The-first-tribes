@@ -64,11 +64,44 @@ jobs:
           node scripts/configure-android.mjs
           npx cap sync android
 
+      - name: Restore Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Configure Gradle Maven Central mirror
+        run: |
+          mkdir -p ~/.gradle/init.d
+          cat << 'EOF' > ~/.gradle/init.d/maven-mirror.gradle
+          def mirrorUrl = "https://maven-central.storage-download.googleapis.com/maven2"
+          def patchRepos = { RepositoryHandler repos ->
+            repos.withType(MavenArtifactRepository).configureEach { repo ->
+              def u = repo.url.toString()
+              if (u.contains("repo.maven.apache.org") || u.contains("repo1.maven.org")) {
+                repo.setUrl(mirrorUrl)
+              }
+            }
+          }
+          gradle.settingsEvaluated { settings ->
+            patchRepos(settings.pluginManagement.repositories)
+            patchRepos(settings.dependencyResolutionManagement.repositories)
+          }
+          allprojects {
+            patchRepos(buildscript.repositories)
+            patchRepos(repositories)
+          }
+          EOF
+
       - name: Build Android Debug APK
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug --max-workers=2 --no-daemon
 
       - name: Copy APK into dist
         run: cp android/app/build/outputs/apk/debug/app-debug.apk dist/FirstTribes.apk

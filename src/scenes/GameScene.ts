@@ -71,6 +71,7 @@ import {
   WeaponType,
   YEARS_PER_SEASON_CHANGE
 } from '../types/game';
+import { GAME_DPR } from '../utils/display';
 import { SoundFX } from '../utils/SoundFX';
 
 interface CloudShadow {
@@ -231,9 +232,10 @@ export class GameScene extends Phaser.Scene {
     this.input.mouse?.disableContextMenu();
     this.cameras.main.setBounds(0, 0, this.worldWidth, this.worldHeight);
     this.cameras.main.centerOn(this.playerBaseX, this.playerBaseY);
-    if (Math.min(this.scale.width, this.scale.height) < 520) {
-      this.cameras.main.setZoom(0.78);
-    }
+    const logicalW = this.scale.width / GAME_DPR;
+    const logicalH = this.scale.height / GAME_DPR;
+    const baseZoom = Math.min(logicalW, logicalH) < 520 ? 0.78 : 1.0;
+    this.cameras.main.setZoom(baseZoom * GAME_DPR);
 
     this.createTerrain();
     this.river = new River(this, this.worldWidth, this.worldHeight, preset.riverLayout, this.season);
@@ -260,6 +262,7 @@ export class GameScene extends Phaser.Scene {
       this.applyLoadedSaveData(GameScene.pendingLoad);
       GameScene.pendingLoad = null;
     }
+    this.fogSystem.setEnabled(this.gameConfig.fogOfWar);
     this.applySeasonToWorld();
     this.rebuildObstacleCache();
     this.setupInput();
@@ -504,7 +507,7 @@ export class GameScene extends Phaser.Scene {
     });
     uiScene.events.on('camera-zoom', (delta: number) => {
       const cam = this.cameras.main;
-      cam.setZoom(Phaser.Math.Clamp(cam.zoom + delta, 0.42, 1.55));
+      cam.setZoom(Phaser.Math.Clamp(cam.zoom + delta * GAME_DPR, 0.42 * GAME_DPR, 1.55 * GAME_DPR));
     });
     uiScene.events.on('camera-home', () => {
       this.cameras.main.pan(this.playerBaseX, this.playerBaseY, 320, 'Sine.easeOut');
@@ -3008,7 +3011,11 @@ export class GameScene extends Phaser.Scene {
 
     this.input.on('wheel', (_p: Phaser.Input.Pointer, _objs: unknown[], _dx: number, dy: number) => {
       const cam = this.cameras.main;
-      const nextZoom = Phaser.Math.Clamp(cam.zoom - dy * 0.0008, 0.42, 1.55);
+      const nextZoom = Phaser.Math.Clamp(
+        cam.zoom - dy * 0.0008 * GAME_DPR,
+        0.42 * GAME_DPR,
+        1.55 * GAME_DPR
+      );
       cam.setZoom(nextZoom);
     });
 
@@ -3059,10 +3066,14 @@ export class GameScene extends Phaser.Scene {
         const dist = Phaser.Math.Distance.Between(p1.x, p1.y, p2.x, p2.y);
         const midX = (p1.x + p2.x) * 0.5;
         const midY = (p1.y + p2.y) * 0.5;
-        if (this.pinchPrevDist > 12 && dist > 12) {
+        if (this.pinchPrevDist > 12 * GAME_DPR && dist > 12 * GAME_DPR) {
           const cam = this.cameras.main;
           const factor = dist / this.pinchPrevDist;
-          const nextZoom = Phaser.Math.Clamp(cam.zoom * factor, 0.42, 1.55);
+          const nextZoom = Phaser.Math.Clamp(
+            cam.zoom * factor,
+            0.42 * GAME_DPR,
+            1.55 * GAME_DPR
+          );
           cam.scrollX -= (midX - this.pinchPrevMidX) / cam.zoom;
           cam.scrollY -= (midY - this.pinchPrevMidY) / cam.zoom;
           cam.setZoom(nextZoom);
@@ -3084,7 +3095,7 @@ export class GameScene extends Phaser.Scene {
       ) {
         const dx = pointer.x - this.panStartX;
         const dy = pointer.y - this.panStartY;
-        if (Math.hypot(dx, dy) > 10) {
+        if (Math.hypot(dx, dy) > 10 * GAME_DPR) {
           this.panMoved = true;
           const x = Math.min(this.marqueeStartX, pointer.worldX);
           const y = Math.min(this.marqueeStartY, pointer.worldY);
@@ -3102,7 +3113,7 @@ export class GameScene extends Phaser.Scene {
       if (!this.isPanning || !pointer.isDown) return;
       const dx = pointer.x - this.panStartX;
       const dy = pointer.y - this.panStartY;
-      if (Math.hypot(dx, dy) > 12) {
+      if (Math.hypot(dx, dy) > 12 * GAME_DPR) {
         this.panMoved = true;
       }
       if (this.panMoved) {
@@ -3185,7 +3196,8 @@ export class GameScene extends Phaser.Scene {
           return;
         }
 
-        const touchPad = isTouch ? Math.max(14, 20 / this.cameras.main.zoom) : 0;
+        const logicalZoom = this.cameras.main.zoom / GAME_DPR;
+        const touchPad = isTouch ? Math.max(14, 20 / logicalZoom) : 0;
 
         const hitVillager =
           (currentlyOver.find((obj) => obj instanceof Villager) as Villager | undefined) ??
@@ -3871,7 +3883,8 @@ export class GameScene extends Phaser.Scene {
   private handleKeyboardCamera(delta: number): void {
     if (!this.cursors || !this.wasd) return;
     const cam = this.cameras.main;
-    const speed = (520 / cam.zoom) * (delta / 1000);
+    const logicalZoom = cam.zoom / GAME_DPR;
+    const speed = (520 / logicalZoom) * (delta / 1000);
 
     if (this.cursors.left.isDown || this.wasd.A.isDown) cam.scrollX -= speed;
     if (this.cursors.right.isDown || this.wasd.D.isDown) cam.scrollX += speed;

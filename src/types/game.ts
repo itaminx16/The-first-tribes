@@ -228,7 +228,7 @@ export const DEFAULT_GAME_SETUP: GameSetupConfig = {
   mapId: 'river_valley',
   difficulty: 'normal',
   rivalCount: 3,
-  fogOfWar: false,
+  fogOfWar: true,
   musicTrack: 0,
   ambientSounds: true
 };

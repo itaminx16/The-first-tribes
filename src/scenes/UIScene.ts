@@ -34,6 +34,7 @@ import {
 } from '../types/game';
 import { SaveSummary } from '../systems/SaveSystem';
 import { MainMenuOverlay } from '../ui/MainMenuOverlay';
+import { GAME_DPR } from '../utils/display';
 import { pwaManager } from '../utils/pwa';
 import { SoundFX } from '../utils/SoundFX';
 
@@ -520,7 +521,7 @@ export class UIScene extends Phaser.Scene {
     this.actionBarContainer.setVisible(visible);
     this.buildConfirmContainer.setVisible(visible && this.activeBuildType !== null);
     this.hintText.setVisible(
-      visible && this.scale.width >= 1024 && !this.sys.game.device.input.touch
+      visible && this.scale.width / GAME_DPR >= 1024 && !this.sys.game.device.input.touch
     );
     if (!visible) {
       this.quickDockContainer.setVisible(false);
@@ -2810,8 +2811,10 @@ export class UIScene extends Phaser.Scene {
       this.quickDockContainer.setVisible(false);
       return;
     }
-    const wideDesktop = this.scale.width >= 1180 && this.scale.height > 520;
-    const isPortrait = this.scale.width < 600 && this.scale.height >= this.scale.width;
+    const logicalW = this.scale.width / GAME_DPR;
+    const logicalH = this.scale.height / GAME_DPR;
+    const wideDesktop = logicalW >= 1180 && logicalH > 520;
+    const isPortrait = logicalW < 600 && logicalH >= logicalW;
     const hideForContext =
       !wideDesktop &&
       !isPortrait &&
@@ -2820,83 +2823,94 @@ export class UIScene extends Phaser.Scene {
   }
 
   private layoutUI(width: number, height: number): void {
-    const isCompactLandscape = height <= 520 && width > height;
-    const isPortrait = width < 600 && height >= width;
+    const dpr = GAME_DPR;
+    const logicalW = width / dpr;
+    const logicalH = height / dpr;
+    const toCanvas = (v: number): number => Math.round(v * dpr);
+
+    const isCompactLandscape = logicalH <= 520 && logicalW > logicalH;
+    const isPortrait = logicalW < 600 && logicalH >= logicalW;
 
     const miniScale =
-      width >= 1050 && height >= 600
+      logicalW >= 1050 && logicalH >= 600
         ? 1
         : isCompactLandscape
-        ? Math.min(0.68, (height * 0.29) / 144)
+        ? Math.min(0.68, (logicalH * 0.29) / 144)
         : isPortrait
         ? 0.54
         : 0.78;
 
     const rightReserve = isPortrait ? 12 : Math.round(this.minimapW * miniScale) + 18;
-    const topMaxW = Math.max(260, width - rightReserve - 12);
+    const topMaxW = Math.max(260, logicalW - rightReserve - 12);
     const barScale = Math.min(1, topMaxW / this.baseBarWidth);
     const barCenterOffset = isPortrait
-      ? Math.round((width - this.baseBarWidth * barScale) / 2)
-      : Math.round((width - rightReserve - this.baseBarWidth * barScale) / 2);
-    this.topBarContainer.setScale(barScale).setPosition(Math.max(8, barCenterOffset), 6);
+      ? (logicalW - this.baseBarWidth * barScale) / 2
+      : (logicalW - rightReserve - this.baseBarWidth * barScale) / 2;
+    this.topBarContainer
+      .setScale(barScale * dpr)
+      .setPosition(toCanvas(Math.max(8, barCenterOffset)), toCanvas(6));
 
     const topBarH = this.isStorageExpanded ? 68 : 38;
     const calScale = Math.min(barScale, topMaxW / this.calendarBarWidth);
-    const calY = Math.round(6 + topBarH * barScale + 4);
+    const calY = 6 + topBarH * barScale + 4;
     const calX = isPortrait
-      ? Math.round((width - this.calendarBarWidth * calScale) / 2)
-      : Math.round((width - rightReserve - this.calendarBarWidth * calScale) / 2);
-    this.calendarContainer.setScale(calScale).setPosition(Math.max(8, calX), calY);
+      ? (logicalW - this.calendarBarWidth * calScale) / 2
+      : (logicalW - rightReserve - this.calendarBarWidth * calScale) / 2;
+    this.calendarContainer
+      .setScale(calScale * dpr)
+      .setPosition(toCanvas(Math.max(8, calX)), toCanvas(calY));
 
-    const calBottom = calY + Math.round(38 * calScale);
+    const calBottom = calY + 38 * calScale;
     const miniY = isPortrait ? calBottom + 6 : 6;
-    const miniW = Math.round(this.minimapW * miniScale);
-    const miniH = Math.round((this.minimapH + 22) * miniScale);
-    this.minimapContainer.setScale(miniScale).setPosition(width - miniW - 8, miniY);
+    const miniW = this.minimapW * miniScale;
+    const miniH = (this.minimapH + 22) * miniScale;
+    this.minimapContainer
+      .setScale(miniScale * dpr)
+      .setPosition(toCanvas(logicalW - miniW - 8), toCanvas(miniY));
 
     const minimapBottom = miniY + miniH;
     const actionScale = isPortrait
-      ? Math.min(1, (width - 16) / this.actionBarWidth)
-      : Math.min(1, (width * 0.45) / this.actionBarWidth, isCompactLandscape ? 0.84 : 1);
-    this.actionBarContainer.setScale(actionScale);
-    const actionH = Math.round(46 * actionScale);
-    const actionMarginBottom = width >= 1180 && !isCompactLandscape ? 22 : 8;
+      ? Math.min(1, (logicalW - 16) / this.actionBarWidth)
+      : Math.min(1, (logicalW * 0.45) / this.actionBarWidth, isCompactLandscape ? 0.84 : 1);
+    this.actionBarContainer.setScale(actionScale * dpr);
+    const actionH = 46 * actionScale;
+    const actionMarginBottom = logicalW >= 1180 && !isCompactLandscape ? 22 : 8;
 
-    const ctrlMaxH = Math.max(112, height - minimapBottom - actionH - actionMarginBottom - 16);
+    const ctrlMaxH = Math.max(112, logicalH - minimapBottom - actionH - actionMarginBottom - 16);
     const ctrlScale = Math.min(1, Math.max(0.62, ctrlMaxH / 208), isCompactLandscape ? 0.82 : 1);
-    const ctrlW = Math.round(44 * ctrlScale);
+    const ctrlW = 44 * ctrlScale;
     this.cameraControlsContainer
-      .setScale(ctrlScale)
-      .setPosition(width - ctrlW - 8, minimapBottom + 6);
+      .setScale(ctrlScale * dpr)
+      .setPosition(toCanvas(logicalW - ctrlW - 8), toCanvas(minimapBottom + 6));
 
     const dockScale = isPortrait
-      ? Math.min(1, (width - 16) / 362)
-      : Math.min(1, (width * 0.45) / 362, isCompactLandscape ? 0.82 : 1);
-    this.quickDockContainer.setScale(dockScale);
-    const dockH = Math.round(42 * dockScale);
+      ? Math.min(1, (logicalW - 16) / 362)
+      : Math.min(1, (logicalW * 0.45) / 362, isCompactLandscape ? 0.82 : 1);
+    this.quickDockContainer.setScale(dockScale * dpr);
+    const dockH = 42 * dockScale;
 
     const cardScale = isPortrait
-      ? Math.min(1, (width - 16) / this.cardWidth)
-      : Math.min(
-          1,
-          (width * 0.45) / this.cardWidth,
-          (height * (isCompactLandscape ? 0.45 : 0.42)) / this.cardHeight
-        );
-    this.unitPanel.setScale(cardScale);
-    this.groupPanel.setScale(cardScale);
+      ? Math.min(0.84, (logicalW - 16) / this.cardWidth)
+      : isCompactLandscape
+      ? Math.min(0.68, (logicalW * 0.34) / this.cardWidth, (logicalH * 0.34) / this.cardHeight)
+      : Math.min(1, (logicalW * 0.42) / this.cardWidth, (logicalH * 0.38) / this.cardHeight);
+    this.unitPanel.setScale(cardScale * dpr);
+    this.groupPanel.setScale(cardScale * dpr);
 
     const bPanelScale = isPortrait
-      ? Math.min(1, (width - 16) / this.buildingPanelW)
-      : Math.min(
-          1,
-          (width * 0.43) / this.buildingPanelW,
-          (height * (isCompactLandscape ? 0.44 : 0.42)) / this.buildingPanelH
-        );
-    this.buildingPanel.setScale(bPanelScale);
-    this.campfirePanel.setScale(bPanelScale);
+      ? Math.min(1, (logicalW - 16) / this.buildingPanelW)
+      : isCompactLandscape
+      ? Math.min(
+          0.74,
+          (logicalW * 0.36) / this.buildingPanelW,
+          (logicalH * 0.37) / this.buildingPanelH
+        )
+      : Math.min(1, (logicalW * 0.43) / this.buildingPanelW, (logicalH * 0.42) / this.buildingPanelH);
+    this.buildingPanel.setScale(bPanelScale * dpr);
+    this.campfirePanel.setScale(bPanelScale * dpr);
 
-    const confirmScale = Math.min(1, (width - 20) / 420, isCompactLandscape ? 0.86 : 1);
-    this.buildConfirmContainer.setScale(confirmScale);
+    const confirmScale = Math.min(1, (logicalW - 20) / 420, isCompactLandscape ? 0.86 : 1);
+    this.buildConfirmContainer.setScale(confirmScale * dpr);
 
     const centerModals: Array<{
       c: Phaser.GameObjects.Container;
@@ -2910,101 +2924,115 @@ export class UIScene extends Phaser.Scene {
       { c: this.rosterModalContainer, mw: 640, mh: 442 },
     ];
     for (const m of centerModals) {
+      const modalScale = Math.min(1, (logicalW - 16) / m.mw, (logicalH - 16) / m.mh);
       m.c
         .setPosition(Math.round(width / 2), Math.round(height / 2))
-        .setScale(Math.min(1, (width - 16) / m.mw, (height - 16) / m.mh));
+        .setScale(modalScale * dpr);
     }
 
     if (isPortrait) {
-      const actionY = height - actionH - 8;
+      const actionY = logicalH - actionH - 8;
       this.actionBarContainer.setPosition(
-        Math.round((width - Math.round(this.actionBarWidth * actionScale)) / 2),
-        actionY
+        toCanvas((logicalW - this.actionBarWidth * actionScale) / 2),
+        toCanvas(actionY)
       );
       const dockY = actionY - dockH - 6;
       this.quickDockContainer.setPosition(
-        Math.round((width - Math.round(362 * dockScale)) / 2),
-        dockY
+        toCanvas((logicalW - 362 * dockScale) / 2),
+        toCanvas(dockY)
       );
       const panelBottom = dockY - 8;
       this.unitPanel.setPosition(
-        Math.round((width - Math.round(this.cardWidth * cardScale)) / 2),
-        panelBottom - Math.round(this.cardHeight * cardScale)
+        toCanvas((logicalW - this.cardWidth * cardScale) / 2),
+        toCanvas(panelBottom - this.cardHeight * cardScale)
       );
       this.groupPanel.setPosition(
-        Math.round((width - Math.round(368 * cardScale)) / 2),
-        panelBottom - Math.round(114 * cardScale)
+        toCanvas((logicalW - 368 * cardScale) / 2),
+        toCanvas(panelBottom - 114 * cardScale)
       );
       this.buildingPanel.setPosition(
-        Math.round((width - Math.round(this.buildingPanelW * bPanelScale)) / 2),
-        panelBottom - Math.round(this.buildingPanelH * bPanelScale)
+        toCanvas((logicalW - this.buildingPanelW * bPanelScale) / 2),
+        toCanvas(panelBottom - this.buildingPanelH * bPanelScale)
       );
       this.campfirePanel.setPosition(
-        Math.round((width - Math.round(this.buildingPanelW * bPanelScale)) / 2),
-        panelBottom - Math.round(132 * bPanelScale)
+        toCanvas((logicalW - this.buildingPanelW * bPanelScale) / 2),
+        toCanvas(panelBottom - 132 * bPanelScale)
       );
       this.buildConfirmContainer.setPosition(
-        Math.round(width / 2),
-        dockY - Math.round(28 * confirmScale) - 6
+        toCanvas(logicalW / 2),
+        toCanvas(dockY - 28 * confirmScale - 6)
       );
       this.hintText.setVisible(false);
-    } else if (width >= 1180 && !isCompactLandscape) {
-      const actionY = height - actionH - actionMarginBottom;
+    } else if (logicalW >= 1180 && !isCompactLandscape) {
+      const actionY = logicalH - actionH - actionMarginBottom;
       this.actionBarContainer.setPosition(
-        width - Math.round(this.actionBarWidth * actionScale) - 14,
-        actionY
+        toCanvas(logicalW - this.actionBarWidth * actionScale - 14),
+        toCanvas(actionY)
       );
-      this.unitPanel.setPosition(14, height - Math.round(this.cardHeight * cardScale) - 14);
-      this.groupPanel.setPosition(14, height - Math.round(114 * cardScale) - 14);
+      this.unitPanel.setPosition(
+        toCanvas(14),
+        toCanvas(logicalH - this.cardHeight * cardScale - 14)
+      );
+      this.groupPanel.setPosition(toCanvas(14), toCanvas(logicalH - 114 * cardScale - 14));
       this.quickDockContainer.setPosition(
-        Math.round(this.cardWidth * cardScale + 26),
-        height - dockH - actionMarginBottom
+        toCanvas(this.cardWidth * cardScale + 26),
+        toCanvas(logicalH - dockH - actionMarginBottom)
       );
       this.buildingPanel.setPosition(
-        width - Math.round(this.buildingPanelW * bPanelScale) - 14,
-        actionY - Math.round(this.buildingPanelH * bPanelScale) - 10
+        toCanvas(logicalW - this.buildingPanelW * bPanelScale - 14),
+        toCanvas(actionY - this.buildingPanelH * bPanelScale - 10)
       );
       this.campfirePanel.setPosition(
-        width - Math.round(this.buildingPanelW * bPanelScale) - 14,
-        actionY - Math.round(132 * bPanelScale) - 10
+        toCanvas(logicalW - this.buildingPanelW * bPanelScale - 14),
+        toCanvas(actionY - 132 * bPanelScale - 10)
       );
       this.buildConfirmContainer.setPosition(
-        Math.round(width / 2),
-        height - dockH - actionMarginBottom - Math.round(32 * confirmScale) - 12
+        toCanvas(logicalW / 2),
+        toCanvas(logicalH - dockH - actionMarginBottom - 32 * confirmScale - 12)
       );
       const showDesktopHint =
-        width >= 1024 && !this.sys.game.device.input.touch && !this.isMenuOpenState;
-      this.hintText.setOrigin(1, 1).setPosition(width - 14, height - 4).setVisible(showDesktopHint);
+        logicalW >= 1024 && !this.sys.game.device.input.touch && !this.isMenuOpenState;
+      this.hintText
+        .setScale(dpr)
+        .setOrigin(1, 1)
+        .setPosition(toCanvas(logicalW - 14), toCanvas(logicalH - 4))
+        .setVisible(showDesktopHint);
     } else {
-      const actionW = Math.round(this.actionBarWidth * actionScale);
-      const actionY = height - actionH - 8;
-      this.actionBarContainer.setPosition(width - actionW - 8, actionY);
-      this.unitPanel.setPosition(8, height - Math.round(this.cardHeight * cardScale) - 8);
-      this.groupPanel.setPosition(8, height - Math.round(114 * cardScale) - 8);
+      const actionW = this.actionBarWidth * actionScale;
+      const actionY = logicalH - actionH - 8;
+      this.actionBarContainer.setPosition(toCanvas(logicalW - actionW - 8), toCanvas(actionY));
+      this.unitPanel.setPosition(
+        toCanvas(8),
+        toCanvas(logicalH - this.cardHeight * cardScale - 8)
+      );
+      this.groupPanel.setPosition(toCanvas(8), toCanvas(logicalH - 114 * cardScale - 8));
 
-      const dockW = Math.round(362 * dockScale);
-      this.quickDockContainer.setPosition(width - dockW - 8, actionY - dockH - 6);
+      const dockW = 362 * dockScale;
+      this.quickDockContainer.setPosition(
+        toCanvas(logicalW - dockW - 8),
+        toCanvas(actionY - dockH - 6)
+      );
 
-      const rightEdgeForPanels = width - ctrlW - 14;
-      const bW = Math.round(this.buildingPanelW * bPanelScale);
+      const rightEdgeForPanels = logicalW - ctrlW - 14;
+      const bW = this.buildingPanelW * bPanelScale;
       this.buildingPanel.setPosition(
-        rightEdgeForPanels - bW,
-        actionY - Math.round(this.buildingPanelH * bPanelScale) - 8
+        toCanvas(rightEdgeForPanels - bW),
+        toCanvas(actionY - this.buildingPanelH * bPanelScale - 8)
       );
       this.campfirePanel.setPosition(
-        rightEdgeForPanels - bW,
-        actionY - Math.round(132 * bPanelScale) - 8
+        toCanvas(rightEdgeForPanels - bW),
+        toCanvas(actionY - 132 * bPanelScale - 8)
       );
 
       if (isCompactLandscape) {
         this.buildConfirmContainer.setPosition(
-          Math.max(216, Math.round((width - rightReserve) / 2)),
-          calBottom + Math.round(26 * confirmScale) + 6
+          toCanvas(Math.max(216, (logicalW - rightReserve) / 2)),
+          toCanvas(calBottom + 26 * confirmScale + 6)
         );
       } else {
         this.buildConfirmContainer.setPosition(
-          Math.round(width / 2),
-          actionY - dockH - Math.round(28 * confirmScale) - 14
+          toCanvas(logicalW / 2),
+          toCanvas(actionY - dockH - 28 * confirmScale - 14)
         );
       }
       this.hintText.setVisible(false);

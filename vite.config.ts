@@ -36,6 +36,55 @@ function firstTribesPwaPlugin(version: string): Plugin {
       const distDir = path.resolve(__dirname, 'dist');
       if (!fs.existsSync(distDir)) return;
 
+      // Stamp GitHub Pages subpath (e.g. /The-first-tribes/) into dist/manifest.webmanifest
+      // so Chrome on Android builds a WebAPK whose start_url & scope launch reliably
+      const repoName = process.env.GITHUB_REPOSITORY?.split('/')[1];
+      const manifestBase = repoName ? `/${repoName}/` : './';
+      const manifestPath = path.join(distDir, 'manifest.webmanifest');
+      const baseManifest = fs.existsSync(manifestPath)
+        ? (JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as Record<string, unknown>)
+        : {};
+      delete baseManifest.display_override;
+
+      const stampedManifest = {
+        ...baseManifest,
+        id: manifestBase,
+        name: baseManifest.name ?? 'Первісні Племена',
+        short_name: baseManifest.short_name ?? 'Первісні Племена',
+        description:
+          baseManifest.description ??
+          '2.5D стратегія виживання первісного племені з підтримкою гри офлайн.',
+        lang: baseManifest.lang ?? 'uk',
+        start_url: manifestBase,
+        scope: manifestBase,
+        display: 'standalone',
+        orientation: 'landscape',
+        background_color: baseManifest.background_color ?? '#110a06',
+        theme_color: baseManifest.theme_color ?? '#1c130c',
+        categories: baseManifest.categories ?? ['games', 'strategy'],
+        icons: [
+          {
+            src: `${manifestBase}icons/icon-192.png`,
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'any'
+          },
+          {
+            src: `${manifestBase}icons/icon-512.png`,
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'any'
+          },
+          {
+            src: `${manifestBase}icons/icon-maskable-512.png`,
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable'
+          }
+        ]
+      };
+      fs.writeFileSync(manifestPath, `${JSON.stringify(stampedManifest, null, 2)}\n`, 'utf8');
+
       const files = collectDistFiles(distDir, distDir).sort();
       const hasher = crypto.createHash('sha256');
       for (const rel of files) {
@@ -102,7 +151,9 @@ self.addEventListener('fetch', (event) => {
           return res;
         })
         .catch(() =>
-          caches.match('./index.html').then((cached) => cached || caches.match('./'))
+          caches
+            .match('./index.html', { ignoreSearch: true })
+            .then((cached) => cached || caches.match('./', { ignoreSearch: true }))
         )
     );
     return;
@@ -110,7 +161,7 @@ self.addEventListener('fetch', (event) => {
 
   // Static assets, icons & manifest: Cache-First with network fallback
   event.respondWith(
-    caches.match(req).then((cached) => {
+    caches.match(req, { ignoreSearch: true }).then((cached) => {
       if (cached) return cached;
       return fetch(req).then((res) => {
         if (res && res.ok && res.type === 'basic') {

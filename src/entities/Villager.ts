@@ -37,6 +37,12 @@ import {
   WeaponType
 } from '../types/game';
 import { SoundFX } from '../utils/SoundFX';
+import {
+  createNavAgentState,
+  NavigationAgentState,
+  resetNavAgentState,
+  stepSmartMove,
+} from '../systems/NavigationHelper';
 import type { Animal } from './Animal';
 import type { AnimalCarcass } from './AnimalCarcass';
 import { Campfire } from './Campfire';
@@ -44,6 +50,7 @@ import type { EnemyUnit } from './EnemyUnit';
 import { Hut } from './Hut';
 import { Lake } from './Lake';
 import { ResourceNode } from './ResourceNode';
+import type { River } from './River';
 import type { TribeBuilding } from './TribeBuilding';
 
 export interface FamilySeedInfo {
@@ -83,6 +90,7 @@ export interface VillagerCallbacks {
   onEnemyConvertedToCaptive: (enemy: EnemyUnit, shaman: Villager) => void;
   findUnfinishedBuilding: (x: number, y: number) => Hut | TribeBuilding | null;
   getObstacles: () => ObstacleCircle[];
+  getRiver: () => River | null;
   getStoragePoint: (type: ResourceType) => { x: number; y: number };
   isStorageFull: (type: ResourceType) => boolean;
   hasFoodInStorage: () => boolean;
@@ -200,8 +208,14 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
 
   private progressBg: Phaser.GameObjects.Graphics;
   private progressFill: Phaser.GameObjects.Graphics;
+  private hasProgressBar = false;
+  private taskBadgeContainer: Phaser.GameObjects.Container;
+  private taskBadgeBg: Phaser.GameObjects.Graphics;
+  private taskBadgeText: Phaser.GameObjects.Text;
+  private lastTaskBadgeKey = '';
   private bubbleContainer: Phaser.GameObjects.Container;
   private bubbleText: Phaser.GameObjects.Text;
+  private navState: NavigationAgentState;
 
   private campfire: Campfire;
   private callbacks: VillagerCallbacks;
@@ -254,14 +268,6 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
   private mournTarget: Villager | null = null;
   private mournSpot: Phaser.Math.Vector2 | null = null;
   private mournBubbleTimer = 1200;
-
-  private stuckCheckTimer = 0;
-  private stuckAnchorX = 0;
-  private stuckAnchorY = 0;
-  private stuckRetries = 0;
-  private avoidSideSign = 1;
-  private detourTarget: Phaser.Math.Vector2 | null = null;
-  private detourTimer = 0;
 
   private carrying: ResourceType | null = null;
   private carryVisual: CarryVisualType | null = null;
@@ -320,9 +326,7 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     this.spouseName = familySeed?.spouseName ?? null;
     this.parentNames = familySeed?.parentNames ? [...familySeed.parentNames] : [];
     this.childrenNames = familySeed?.childrenNames ? [...familySeed.childrenNames] : [];
-    this.avoidSideSign = id.charCodeAt(id.length - 1) % 2 === 0 ? 1 : -1;
-    this.stuckAnchorX = x;
-    this.stuckAnchorY = y;
+    this.navState = createNavAgentState(x, y, id.charCodeAt(id.length - 1) || 0);
 
     this.selectionRing = scene.add.image(0, 6, 'selection-ring');
     this.selectionRing.setVisible(false);
@@ -399,8 +403,16 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     this.progressBg = scene.add.graphics();
     this.progressFill = scene.add.graphics();
 
+    // Overhead activity indicator above head showing current task
+    this.taskBadgeContainer = scene.add.container(0, -60);
+    this.taskBadgeBg = scene.add.graphics();
+    this.taskBadgeText = scene.add
+      .text(0, 0, '', { fontSize: '11px', fontStyle: 'bold' })
+      .setOrigin(0.5);
+    this.taskBadgeContainer.add([this.taskBadgeBg, this.taskBadgeText]);
+
     // Emotion/chat bubble above head
-    this.bubbleContainer = scene.add.container(0, -70);
+    this.bubbleContainer = scene.add.container(0, -88);
     const bubbleBg = scene.add.image(0, 0, 'bubble-bg');
     this.bubbleText = scene.add
       .text(0, -4, '💬', {
@@ -419,6 +431,7 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
       this.wadeRipple,
       this.progressBg,
       this.progressFill,
+      this.taskBadgeContainer,
       this.bubbleContainer
     ]);
     this.setSize(52, 66);
@@ -529,7 +542,7 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
   }
 
   public checkPersonalFreeTime(seasonElapsedMs: number): void {
-    if (this.isChild || this.isDying) return;
+    if (this.isChild || this.isDying || this.isGarrisonedInWatchtower()) return;
     const shouldBeFree =
       seasonElapsedMs >= this.freeTimeStartMs &&
       seasonElapsedMs < this.freeTimeStartMs + FREE_TIME_DURATION_MS;
@@ -538,6 +551,34 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     } else if (!shouldBeFree && this.isFreeTime) {
       this.exitFreeTimeAndResume();
     }
+  }
+
+  public isGarrisonedInWatchtower(): boolean {
+    return Boolean(
+      this.assignedBuilding &&
+        this.assignedBuilding.scene &&
+        this.assignedBuilding.buildingType === 'watchtower' &&
+        this.assignedBuilding.isComplete() &&
+        this.warriorClass !== null
+    );
+  }
+
+  public faceWorldPoint(wx: number, wy: number): void {
+    this.setHeading(wx - this.x, wy - this.y);
+  }
+
+  public exitWatchtowerGarrison(dropX: number, dropY: number): void {
+    this.assignedBuilding = null;
+    this.assignedProfession = null;
+    this.workBuilding = null;
+    this.shadowOuter.setVisible(true);
+    this.shadowCore.setVisible(true);
+    this.rig.y = 0;
+    this.setPosition(dropX, dropY);
+    this.clearProgressBar();
+    this.resetPose();
+    this.state = this.warriorClass ? 'PATROLLING' : 'IDLE_WANDER';
+    this.updateHeldTool();
   }
 
   public isShaman(): boolean {
@@ -586,6 +627,7 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     if (
       this.isChild ||
       this.isDying ||
+      this.isGarrisonedInWatchtower() ||
       this.isInCombat() ||
       this.state === 'MOVING_TO_BREED' ||
       this.state === 'BREEDING_IN_HUT' ||
@@ -641,7 +683,12 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     ) {
       this.endChat();
       this.hideBubble();
-      if (this.warriorClass) {
+      if (this.assignedBuilding && this.assignedBuilding.scene && this.assignedBuilding.isComplete()) {
+        this.workBuilding = this.assignedBuilding;
+        this.activeProfession = this.assignedProfession;
+        this.state = 'MOVING_TO_WORK';
+        this.updateHeldTool();
+      } else if (this.warriorClass) {
         this.state = 'PATROLLING';
         this.updateHeldTool();
       } else {
@@ -819,8 +866,9 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
 
   public issueMoveOrder(x: number, y: number): void {
     if (this.isDying) return;
-    if (!this.warriorClass) {
-      this.unassignFromBuilding();
+    // Never pull an assigned station specialist or watchtower warrior off work on a ground tap!
+    if (this.assignedBuilding && this.assignedBuilding.scene && this.assignedBuilding.isComplete()) {
+      return;
     }
     this.interruptForPlayerOrder();
     this.moveTarget = new Phaser.Math.Vector2(x, y);
@@ -904,7 +952,7 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
   }
 
   public issueCombatOrder(target: CombatTarget): void {
-    if (this.isChild || this.isDying || !target.isAlive()) return;
+    if (this.isChild || this.isDying || !target.isAlive() || this.isGarrisonedInWatchtower()) return;
     if (!this.isInCombat()) {
       this.saveCurrentWorkForResume();
     }
@@ -920,7 +968,7 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
   }
 
   public respondToAlarm(threat: CombatTarget | null, isMandatoryAlarm: boolean): void {
-    if (this.isChild || this.isDying) return;
+    if (this.isChild || this.isDying || this.isGarrisonedInWatchtower()) return;
     if (this.warriorClass) {
       const enemy = threat && threat.isAlive() ? threat : this.callbacks.findNearestHostile(this.x, this.y, 1800);
       if (enemy) {
@@ -989,6 +1037,16 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     attacker?: CombatTarget
   ): boolean {
     if (this.isDying || !this.scene) return false;
+    // Garrisoned warrior is protected by the Watchtower: building absorbs all hits until destroyed
+    if (
+      this.isGarrisonedInWatchtower() &&
+      this.state === 'WORKING_STATION' &&
+      this.assignedBuilding &&
+      this.assignedBuilding.isAlive()
+    ) {
+      this.assignedBuilding.takeDamage(rawAmount, attackerX, attackerY, attacker);
+      return false;
+    }
     const tech = this.callbacks.getTechLevels();
     const armorBase = this.equippedArmor === 'none' ? 0 : ARMOR_DEFS[this.equippedArmor].reduction;
     const armorTech = [0, 0.12, 0.25, 0.4][tech.armor] ?? 0;
@@ -1089,8 +1147,13 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     this.updateHeldTool();
   }
 
-  public issueAssignBuilding(building: TribeBuilding): void {
-    if (this.isChild || this.isDying || !building.isComplete() || !building.profession) return;
+  public issueAssignBuilding(building: TribeBuilding): boolean {
+    if (this.isChild || this.isDying || !building.isComplete() || !building.profession) {
+      return false;
+    }
+    if (building.buildingType === 'watchtower' && !this.warriorClass) {
+      return false;
+    }
     if (this.assignedBuilding && this.assignedBuilding !== building) {
       this.unassignFromBuilding();
     }
@@ -1099,7 +1162,11 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
       displaced.assignedBuilding = null;
       displaced.assignedProfession = null;
       displaced.workBuilding = null;
+      displaced.shadowOuter.setVisible(true);
+      displaced.shadowCore.setVisible(true);
+      displaced.rig.y = 0;
     }
+    this.isFreeTime = false;
     this.interruptForPlayerOrder();
     this.assignedBuilding = building;
     this.assignedProfession = building.profession;
@@ -1110,6 +1177,7 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     this.clearProgressBar();
     this.updateCarryVisual();
     this.updateHeldTool();
+    return true;
   }
 
   public issueConvertOrder(target: EnemyUnit): boolean {
@@ -1136,12 +1204,24 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
   }
 
   public unassignFromBuilding(): void {
-    if (this.assignedBuilding) {
-      this.assignedBuilding.removeWorker(this);
+    const prev = this.assignedBuilding;
+    if (prev) {
+      prev.removeWorker(this);
       this.assignedBuilding = null;
     }
     this.assignedProfession = null;
     this.workBuilding = null;
+    this.shadowOuter.setVisible(true);
+    this.shadowCore.setVisible(true);
+    if (prev && prev.scene && prev.buildingType === 'watchtower') {
+      const spot = prev.getWorkSpot();
+      this.rig.y = 0;
+      this.setPosition(spot.x, spot.y);
+      if (this.state === 'WORKING_STATION') {
+        this.state = this.warriorClass ? 'PATROLLING' : 'IDLE_WANDER';
+      }
+      this.updateHeldTool();
+    }
   }
 
   public getSkillLevel(prof: ProfessionId): number {
@@ -1532,7 +1612,9 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     this.updateBehavior(delta, dt);
     if (!this.scene) return;
     this.updateInertialRig(dt);
-    this.setDepth(this.y);
+    const inWatchtower = this.isGarrisonedInWatchtower() && this.state === 'WORKING_STATION';
+    this.setDepth(inWatchtower && this.assignedBuilding ? this.assignedBuilding.y + 6 : this.y);
+    this.updateOverheadTaskBadge();
   }
 
   private growUpIntoAdult(): void {
@@ -1617,10 +1699,10 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     this.combatTarget = null;
     this.mournTarget = null;
     this.mournSpot = null;
-    this.detourTarget = null;
-    this.stuckRetries = 0;
-    this.stuckCheckTimer = 0;
     this.lastResourceType = null;
+    if (this.navState) {
+      resetNavAgentState(this.navState, this.x, this.y);
+    }
     this.clearSavedWork();
     this.isAutonomousEat = false;
   }
@@ -1694,6 +1776,14 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     // Keep full 3D proportions at all times (never squish to a thin sliver mid-turn)
     const targetScaleX = this.currentView === 'side' ? this.facingDir : 1;
     this.rig.setScale(targetScaleX, 1);
+
+    if (this.isGarrisonedInWatchtower() && this.state === 'WORKING_STATION') {
+      this.rig.y = -82;
+      this.rig.setAngle(0);
+      this.shadowOuter.setVisible(false);
+      this.shadowCore.setVisible(false);
+      return;
+    }
 
     if (this.isWading) {
       const shimmer = 0.94 + Math.sin(this.scene.time.now * 0.008) * 0.08;
@@ -1848,6 +1938,13 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
       return;
     }
 
+    if (this.isGarrisonedInWatchtower() && this.state === 'WORKING_STATION') {
+      this.stats.satiety = Math.max(70, this.stats.satiety);
+      this.stats.energy = Math.max(80, this.stats.energy);
+      this.stats.health = Math.min(this.maxHealth, this.stats.health + 2.5 * dt);
+      return;
+    }
+
     if (this.state === 'SLEEPING_IN_HUT') {
       this.stats.energy = Math.min(100, this.stats.energy + 20 * dt);
       this.stats.health = Math.min(this.maxHealth, this.stats.health + 8 * dt);
@@ -1919,11 +2016,12 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
       return;
     }
 
-    // Autonomous hunger check (paused while fighting or fleeing)
+    // Autonomous hunger check (paused while fighting, fleeing, or garrisoned on watchtower)
     if (
       !this.isAutonomousEat &&
       !this.isDying &&
       !this.isInCombat() &&
+      !this.isGarrisonedInWatchtower() &&
       this.state !== 'EATING_BERRIES' &&
       this.state !== 'EATING_STORAGE' &&
       this.state !== 'MOVING_TO_EAT_STORAGE' &&
@@ -1984,6 +2082,7 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
       !this.isChild &&
       !this.isDying &&
       !this.isInCombat() &&
+      !this.isGarrisonedInWatchtower() &&
       this.stats.energy < 25 &&
       this.state !== 'MOVING_TO_SLEEP' &&
       this.state !== 'SLEEPING_IN_HUT' &&
@@ -2375,8 +2474,17 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
 
   private handleIdleWander(delta: number, dt: number): void {
     this.clearProgressBar();
-    if (this.isFreeTime && !this.isChild && !this.isDying) {
+    if (this.isFreeTime && !this.isChild && !this.isDying && !this.isGarrisonedInWatchtower()) {
       this.state = 'FREE_TIME';
+      return;
+    }
+
+    // Return to permanently assigned workstation (including garrisoned Watchtower!) before wandering or patrolling
+    if (this.assignedBuilding && this.assignedBuilding.isComplete()) {
+      this.workBuilding = this.assignedBuilding;
+      this.activeProfession = this.assignedProfession;
+      this.state = 'MOVING_TO_WORK';
+      this.updateHeldTool();
       return;
     }
 
@@ -2394,15 +2502,6 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
         return;
       }
       this.startWarming();
-      return;
-    }
-
-    // Return to permanently assigned workstation before wandering
-    if (this.assignedBuilding && this.assignedBuilding.isComplete()) {
-      this.workBuilding = this.assignedBuilding;
-      this.activeProfession = this.assignedProfession;
-      this.state = 'MOVING_TO_WORK';
-      this.updateHeldTool();
       return;
     }
 
@@ -3397,15 +3496,28 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
         return;
       }
     } else if (this.workBuilding.buildingType === 'watchtower') {
-      this.workBuilding.statusNote = 'Спостереження й обстріл';
+      if (!this.warriorClass) {
+        this.clearProgressBar();
+        this.unassignFromBuilding();
+        this.resetPose();
+        this.state = 'IDLE_WANDER';
+        this.updateHeldTool();
+        return;
+      }
+      // Stay garrisoned atop Watchtower permanently: building shoots bows & absorbs damage first!
+      this.clearProgressBar();
+      this.x = this.workBuilding.x;
+      this.y = this.workBuilding.y + 2;
+      this.toolSprite.setTexture('tool-bow').setVisible(true);
+      this.frontArmGroup.setAngle(-26);
+      this.backArm.setAngle(-12);
+      this.torso.setAngle(0);
+      this.workBuilding.statusNote = `🏹 На посту: ${this.villagerName} (стріляє з лука)`;
+      return;
     }
 
     const cycleLen =
-      this.workBuilding.buildingType === 'armory'
-        ? 3400
-        : this.workBuilding.buildingType === 'watchtower'
-          ? 3800
-          : this.workCycleMs;
+      this.workBuilding.buildingType === 'armory' ? 3400 : this.workCycleMs;
     this.actionTimer += delta * this.getWorkMultiplier(false, prof, prof === 'crafter' || prof === 'armorer');
 
     const p = Phaser.Math.Clamp(this.actionTimer / cycleLen, 0, 1);
@@ -3542,10 +3654,12 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     }
 
     const wStats = this.getCombatWeaponStats();
+    const targetPad = this.combatTarget.id.startsWith('camp-') ? 50 : 0;
+    const effRange = wStats.range + targetPad;
     const dist = Phaser.Math.Distance.Between(this.x, this.y, this.combatTarget.x, this.combatTarget.y);
     const arrived =
-      dist <= wStats.range ||
-      this.moveToward(this.combatTarget.x, this.combatTarget.y, dt, Math.max(24, wStats.range - 10), 1.18);
+      dist <= effRange ||
+      this.moveToward(this.combatTarget.x, this.combatTarget.y, dt, Math.max(24, effRange - 10), 1.18);
 
     if (arrived) {
       this.resetPose();
@@ -3567,8 +3681,10 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     }
 
     const wStats = this.getCombatWeaponStats();
+    const targetPad = this.combatTarget.id.startsWith('camp-') ? 50 : 0;
+    const effRange = wStats.range + targetPad;
     const dist = Phaser.Math.Distance.Between(this.x, this.y, this.combatTarget.x, this.combatTarget.y);
-    if (dist > wStats.range + 16) {
+    if (dist > effRange + 16) {
       this.state = 'COMBAT_CHASE';
       return;
     }
@@ -3637,6 +3753,13 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
       this.callbacks.returnBorrowedDefenseGear(this);
     }
     this.resetPose();
+    if (this.assignedBuilding && this.assignedBuilding.scene && this.assignedBuilding.isComplete()) {
+      this.workBuilding = this.assignedBuilding;
+      this.activeProfession = this.assignedProfession;
+      this.state = 'MOVING_TO_WORK';
+      this.updateHeldTool();
+      return;
+    }
     if (this.warriorClass) {
       this.state = 'PATROLLING';
       this.updateHeldTool();
@@ -3652,6 +3775,13 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
 
   private handlePatrolling(delta: number, dt: number): void {
     this.clearProgressBar();
+    if (this.isGarrisonedInWatchtower()) {
+      this.workBuilding = this.assignedBuilding;
+      this.activeProfession = this.assignedProfession;
+      this.state = 'MOVING_TO_WORK';
+      this.updateHeldTool();
+      return;
+    }
     if (!this.warriorClass) {
       this.state = 'IDLE_WANDER';
       return;
@@ -4040,6 +4170,15 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
       return;
     }
 
+    if (this.assignedBuilding && this.assignedBuilding.scene && this.assignedBuilding.isComplete()) {
+      this.clearSavedWork();
+      this.workBuilding = this.assignedBuilding;
+      this.activeProfession = this.assignedProfession;
+      this.state = 'MOVING_TO_WORK';
+      this.updateHeldTool();
+      return;
+    }
+
     if (this.warriorClass) {
       this.clearSavedWork();
       this.state = 'PATROLLING';
@@ -4134,48 +4273,6 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     this.updateHeldTool();
   }
 
-  private pickClearDetour(
-    tx: number,
-    ty: number,
-    obstacles: ObstacleCircle[],
-    ignoreOwner?: object
-  ): Phaser.Math.Vector2 {
-    const baseAngle = Phaser.Math.Angle.Between(this.x, this.y, tx, ty);
-    const sign = this.avoidSideSign;
-    const offsets = [
-      sign * 1.15,
-      -sign * 1.15,
-      sign * 1.9,
-      -sign * 1.9,
-      sign * 2.55,
-      -sign * 2.55
-    ];
-
-    const bounds = this.callbacks.getWorldBounds();
-    const maxX = Math.max(120, bounds.width - 55);
-    const maxY = Math.max(120, bounds.height - 55);
-
-    for (const d of [95, 135]) {
-      for (const aOff of offsets) {
-        const candX = Phaser.Math.Clamp(this.x + Math.cos(baseAngle + aOff) * d, 55, maxX);
-        const candY = Phaser.Math.Clamp(this.y + Math.sin(baseAngle + aOff) * d, 65, maxY);
-        const blocked = obstacles.some(
-          (obs) =>
-            (!ignoreOwner || obs.owner !== ignoreOwner) &&
-            Phaser.Math.Distance.Between(candX, candY, obs.x, obs.y) < obs.radius + 20
-        );
-        if (!blocked) {
-          return new Phaser.Math.Vector2(candX, candY);
-        }
-      }
-    }
-
-    return new Phaser.Math.Vector2(
-      Phaser.Math.Clamp(this.x + Math.cos(baseAngle + sign * 2.1) * 90, 55, maxX),
-      Phaser.Math.Clamp(this.y + Math.sin(baseAngle + sign * 2.1) * 90, 65, maxY)
-    );
-  }
-
   private moveToward(
     tx: number,
     ty: number,
@@ -4184,152 +4281,36 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     speedMultiplier = 1,
     ignoreOwner?: object
   ): boolean {
-    const rawDist = Math.hypot(tx - this.x, ty - this.y);
-    if (rawDist <= arrivalRadius + 0.5) {
-      this.detourTarget = null;
-      this.stuckRetries = 0;
-      this.stuckCheckTimer = 0;
+    const obstacles = this.callbacks.getObstacles();
+    const res = stepSmartMove(
+      this.x,
+      this.y,
+      tx,
+      ty,
+      dt,
+      this.getMoveSpeed() * speedMultiplier,
+      12,
+      arrivalRadius,
+      obstacles,
+      this.callbacks.getRiver(),
+      Math.max(400, this.callbacks.getWorldBounds().width),
+      Math.max(400, this.callbacks.getWorldBounds().height),
+      this.navState,
+      ignoreOwner
+    );
+
+    if (res.arrived) {
+      this.x = res.x;
+      this.y = res.y;
+      this.setHeading(res.dx, res.dy);
       return true;
     }
-
-    const obstacles = this.callbacks.getObstacles();
-    if (this.detourTarget) {
-      this.detourTimer -= dt * 1000;
-      if (
-        Phaser.Math.Distance.Between(this.x, this.y, this.detourTarget.x, this.detourTarget.y) <=
-          16 ||
-        this.detourTimer <= 0
-      ) {
-        this.detourTarget = null;
-      }
-    }
-
-    this.stuckCheckTimer += dt * 1000;
-    if (this.stuckCheckTimer >= 600) {
-      const moved = Math.hypot(this.x - this.stuckAnchorX, this.y - this.stuckAnchorY);
-      this.stuckAnchorX = this.x;
-      this.stuckAnchorY = this.y;
-      this.stuckCheckTimer = 0;
-
-      if (moved < 10) {
-        this.stuckRetries += 1;
-        this.avoidSideSign *= -1;
-        this.detourTarget = this.pickClearDetour(tx, ty, obstacles, ignoreOwner);
-        this.detourTimer = 1500;
-
-        if (this.stuckRetries >= 4) {
-          this.stuckRetries = 0;
-          if (this.state === 'IDLE_WANDER' || this.state === 'CHILD_PLAYING') {
-            this.moveTarget = null;
-            this.detourTarget = null;
-            return false;
-          }
-          if (
-            this.state === 'MOVING_TO_RESOURCE' &&
-            !this.isAutonomousEat &&
-            this.lastResourceType
-          ) {
-            const alt = this.callbacks.findNearestResourceOfType(
-              this.lastResourceType,
-              this.x + this.avoidSideSign * 65,
-              this.y,
-              750
-            );
-            if (alt && alt !== this.targetNode) {
-              this.targetNode = alt;
-            }
-          }
-        }
-      } else {
-        this.stuckRetries = Math.max(0, this.stuckRetries - 1);
-      }
-    }
-
-    const goalX = this.detourTarget ? this.detourTarget.x : tx;
-    const goalY = this.detourTarget ? this.detourTarget.y : ty;
-    const dx = goalX - this.x;
-    const dy = goalY - this.y;
-    const dist = Math.hypot(dx, dy);
 
     this.isMovingFrame = true;
-    const dirX = dist > 0.001 ? dx / dist : 0;
-    const dirY = dist > 0.001 ? dy / dist : 1;
-
-    // Obstacle avoidance steering (tangential slide + radial push)
-    let steerX = dirX;
-    let steerY = dirY;
-
-    for (const obs of obstacles) {
-      if (ignoreOwner && obs.owner === ignoreOwner) {
-        continue;
-      }
-      const ox = this.x - obs.x;
-      const oy = this.y - obs.y;
-      const oDist = Math.hypot(ox, oy);
-      const avoidRange = obs.radius + 34;
-
-      const probeX = this.x + dirX * 26;
-      const probeY = this.y + dirY * 26;
-      const pDist = Math.hypot(probeX - obs.x, probeY - obs.y);
-
-      if (oDist < avoidRange || pDist < obs.radius + 18) {
-        const nx = ox / Math.max(1, oDist);
-        const ny = oy / Math.max(1, oDist);
-        const t1x = -ny;
-        const t1y = nx;
-        const dot1 = t1x * dirX + t1y * dirY;
-        const sign = Math.abs(dot1) < 0.28 ? this.avoidSideSign : dot1 >= 0 ? 1 : -1;
-
-        const urgency = Phaser.Math.Clamp(
-          1 - (Math.min(oDist, pDist) - obs.radius) / 36,
-          0.25,
-          1.4
-        );
-        steerX += nx * 1.15 * urgency + t1x * sign * 1.45 * urgency;
-        steerY += ny * 1.15 * urgency + t1y * sign * 1.45 * urgency;
-      }
-    }
-
-    const steerLen = Math.hypot(steerX, steerY);
-    const moveDirX = steerLen > 0.001 ? steerX / steerLen : dirX;
-    const moveDirY = steerLen > 0.001 ? steerY / steerLen : dirY;
-    const alignedWithTarget = moveDirX * dirX + moveDirY * dirY > 0.7;
-
-    const moveDist = this.getMoveSpeed() * speedMultiplier * dt;
-    if (!this.detourTarget && alignedWithTarget && rawDist - moveDist <= arrivalRadius + 0.5) {
-      this.x = tx - dirX * arrivalRadius;
-      this.y = ty - dirY * arrivalRadius;
-      this.setHeading(dirX, dirY);
-      this.stuckRetries = 0;
-      this.stuckCheckTimer = 0;
-      return true;
-    }
-
     const prevX = this.x;
     const prevY = this.y;
-    this.x += moveDirX * moveDist;
-    this.y += moveDirY * moveDist;
-
-    // Hard separation so villagers never step inside campfire, rocks, trees, water, or huts
-    for (const obs of obstacles) {
-      if (ignoreOwner && obs.owner === ignoreOwner) {
-        continue;
-      }
-      const ox = this.x - obs.x;
-      const oy = this.y - obs.y;
-      const oDist = Math.hypot(ox, oy);
-      const minSep = obs.radius + 12;
-      if (oDist < minSep) {
-        if (oDist > 0.01) {
-          this.x = obs.x + (ox / oDist) * minSep;
-          this.y = obs.y + (oy / oDist) * minSep;
-        } else {
-          this.x = obs.x;
-          this.y = obs.y + minSep;
-        }
-      }
-    }
-
+    this.x = res.x;
+    this.y = res.y;
     this.setHeading(this.x - prevX, this.y - prevY);
 
     const carryingBundle = this.state === 'RETURNING' && this.carryAmount > 0;
@@ -4522,11 +4503,120 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     this.bubbleContainer.setVisible(false);
   }
 
+  private updateOverheadTaskBadge(): void {
+    if (!this.visible || this.isDying || this.state === 'DYING_LYING' || this.state === 'MOURNING_SITTING') {
+      this.taskBadgeContainer.setVisible(false);
+      return;
+    }
+
+    const icon = this.getOverheadTaskIcon();
+    const elevatedWatchtower =
+      this.isGarrisonedInWatchtower() && this.state === 'WORKING_STATION';
+    const badgeY = elevatedWatchtower ? -140 : this.hasProgressBar ? -74 : -58;
+    this.taskBadgeContainer.setY(badgeY);
+    this.bubbleContainer.setY(badgeY - 22);
+
+    const key = `${icon}:${this.state}`;
+    if (key !== this.lastTaskBadgeKey) {
+      this.lastTaskBadgeKey = key;
+      this.taskBadgeText.setText(icon);
+      this.taskBadgeBg.clear();
+      this.taskBadgeBg.fillStyle(0x1b120b, 0.84);
+      this.taskBadgeBg.fillRoundedRect(-11, -9, 22, 18, 6);
+      const borderCol =
+        this.state === 'COMBAT_ATTACK' ||
+        this.state === 'COMBAT_CHASE' ||
+        this.state === 'FLEEING_TO_CAMPFIRE'
+          ? 0xef4444
+          : this.state === 'WORKING_STATION'
+            ? 0x38bdf8
+            : this.state === 'RETURNING'
+              ? 0xfbbf24
+              : 0xc98a4b;
+      this.taskBadgeBg.lineStyle(1.1, borderCol, 0.9);
+      this.taskBadgeBg.strokeRoundedRect(-11, -9, 22, 18, 6);
+    }
+    this.taskBadgeContainer.setVisible(true);
+  }
+
+  private getOverheadTaskIcon(): string {
+    switch (this.state) {
+      case 'GATHERING':
+      case 'MOVING_TO_RESOURCE': {
+        const t = this.targetNode?.resourceType ?? this.lastResourceType;
+        if (t === 'wood') return '🪓';
+        if (t === 'stone') return '⛏️';
+        return '🫐';
+      }
+      case 'FISHING':
+      case 'MOVING_TO_LAKE':
+        return '🐟';
+      case 'HUNTING':
+      case 'MOVING_TO_HUNT':
+        return '🏹';
+      case 'BUTCHERING':
+      case 'MOVING_TO_CARCASS':
+        return '🥩';
+      case 'CLEARING_STUMP':
+        return '🪓';
+      case 'BUILDING':
+      case 'MOVING_TO_BUILD':
+        return '🔨';
+      case 'WORKING_STATION':
+      case 'MOVING_TO_WORK': {
+        const bt = this.workBuilding?.buildingType ?? this.assignedBuilding?.buildingType;
+        if (bt === 'watchtower') return '🏹';
+        if (bt === 'totem') return '🔮';
+        if (bt === 'smokehouse') return '🔥';
+        if (bt === 'gatherer_hut') return '🧺';
+        return '🛠️';
+      }
+      case 'RETURNING':
+        return '📦';
+      case 'EATING_STORAGE':
+      case 'MOVING_TO_EAT_STORAGE':
+      case 'EATING_BERRIES':
+        return '🍖';
+      case 'SLEEPING_IN_HUT':
+      case 'MOVING_TO_SLEEP':
+        return '💤';
+      case 'MOVING_TO_BREED':
+      case 'BREEDING_IN_HUT':
+        return '❤️';
+      case 'FLEEING_TO_CAMPFIRE':
+      case 'GRABBING_GEAR':
+        return '🚨';
+      case 'COMBAT_CHASE':
+      case 'COMBAT_ATTACK':
+        return '⚔️';
+      case 'PATROLLING':
+        return '🛡️';
+      case 'MOVING_TO_CONVERT':
+      case 'CONVERTING_ENEMY':
+        return '🌀';
+      case 'CHATTING':
+        return '💬';
+      case 'WARMING':
+        return '🔥';
+      case 'FREE_TIME':
+        return '☀️';
+      case 'CHILD_PLAYING':
+      case 'MOVING_TO_NURSERY':
+      case 'IN_NURSERY':
+        return '🌱';
+      case 'MOVING':
+        return '👣';
+      default:
+        return '🌿';
+    }
+  }
+
   private drawProgressBar(progress: number, color: number): void {
+    this.hasProgressBar = true;
     const w = 34;
     const h = 4;
     const x = -w / 2;
-    const y = -62;
+    const y = -60;
 
     this.progressBg.clear();
     this.progressFill.clear();
@@ -4539,6 +4629,7 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
   }
 
   private clearProgressBar(): void {
+    this.hasProgressBar = false;
     this.progressBg.clear();
     this.progressFill.clear();
   }

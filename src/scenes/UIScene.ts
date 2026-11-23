@@ -58,10 +58,33 @@ const BUILD_ORDER: BuildingType[] = [
   'smokehouse',
   'totem',
   'palisade',
+  'bridge',
   'burial_mound',
 ];
 
 const TECH_BRANCHES: TechBranchId[] = ['weapons', 'armor', 'craft', 'healing'];
+
+interface RosterRowRef {
+  container: Phaser.GameObjects.Container;
+  rBg: Phaser.GameObjects.Graphics;
+  portrait: Phaser.GameObjects.Image;
+  nameTxt: Phaser.GameObjects.Text;
+  statusTxt: Phaser.GameObjects.Text;
+  assignBtn: Phaser.GameObjects.Text;
+  villagerId: string;
+}
+
+interface DiplomacyCardRef {
+  container: Phaser.GameObjects.Container;
+  cBg: Phaser.GameObjects.Graphics;
+  header: Phaser.GameObjects.Text;
+  status: Phaser.GameObjects.Text;
+  resLine: Phaser.GameObjects.Text;
+  pactBtn: Phaser.GameObjects.Text;
+  allyBtn: Phaser.GameObjects.Text;
+  tradeBtns: Phaser.GameObjects.Text[];
+  tribeId: string;
+}
 
 interface ModalBuildCardRef {
   type: BuildingType;
@@ -185,6 +208,7 @@ export class UIScene extends Phaser.Scene {
   private assignBtnText!: Phaser.GameObjects.Text;
   private isAssignHovered = false;
   private rosterPickBtn!: Phaser.GameObjects.Text;
+  private unassignBtn!: Phaser.GameObjects.Text;
   private demolishBtn!: Phaser.GameObjects.Text;
   private barracksGroup!: Phaser.GameObjects.Container;
   private barracksTargetText!: Phaser.GameObjects.Text;
@@ -208,9 +232,11 @@ export class UIScene extends Phaser.Scene {
   }> = [];
   private chroniclePage = 0;
 
-  // Diplomacy & Trade Modal
+  // Diplomacy & Trade Modal (persistent reusable cards so 220ms refreshes never destroy active buttons!)
   private diplomacyModalContainer!: Phaser.GameObjects.Container;
   private diplomacyBodyContainer!: Phaser.GameObjects.Container;
+  private diplomacyEmptyText!: Phaser.GameObjects.Text;
+  private diplomacyCards: DiplomacyCardRef[] = [];
 
   // Brand-New HTML Main Menu / New Game / Saves / Settings Overlay
   private menuOverlay!: MainMenuOverlay;
@@ -227,9 +253,11 @@ export class UIScene extends Phaser.Scene {
   private buildConfirmBtn!: Phaser.GameObjects.Text;
   private isBuildPreviewValid = true;
 
-  // Villager Profile Roster Picker Modal
+  // Villager Profile Roster Picker Modal (persistent reusable rows so 220ms refreshes never eat clicks!)
   private rosterModalContainer!: Phaser.GameObjects.Container;
   private rosterListContainer!: Phaser.GameObjects.Container;
+  private rosterEmptyText!: Phaser.GameObjects.Text;
+  private rosterRows: RosterRowRef[] = [];
   private rosterTitleText!: Phaser.GameObjects.Text;
   private rosterPageText!: Phaser.GameObjects.Text;
   private rosterPage = 0;
@@ -280,7 +308,7 @@ export class UIScene extends Phaser.Scene {
   };
   private activeBuildType: BuildingType | null = null;
 
-  private readonly baseBarWidth = 816;
+  private readonly baseBarWidth = 924;
   private readonly calendarBarWidth = 532;
   private readonly cardWidth = 376;
   private readonly cardHeight = 178;
@@ -376,6 +404,7 @@ export class UIScene extends Phaser.Scene {
       this.refreshResourceTexts();
       if (this.buildModalContainer.visible) this.refreshBuildModal();
       if (this.diplomacyModalContainer.visible) this.refreshDiplomacyModal();
+      if (this.latestBuilding?.type === 'granary') this.refreshBuildingPanel();
     });
     gameScene.events.on(
       'selection-updated',
@@ -543,45 +572,59 @@ export class UIScene extends Phaser.Scene {
     this.topBarBg = this.add.graphics();
     this.topBarContainer.add(this.topBarBg);
 
-    // Row 1: Primary resources (Дерево, Камінь, Їжа), Населення, Вождь, 📦 Склад ▾, ⚙️ Меню, 🔊
-    const iconWood = this.add.image(20, 19, 'icon-wood').setScale(0.68);
-    this.woodText = this.add.text(35, 12, `0/${MAX_STORAGE}`, {
-      fontSize: '13px',
+    // Row 1: All 5 core resources (Дерево, Камінь, Їжа, Кістки, Шкури), Населення, Вождь, ⚔️ Арсенал ▾, 💾, ⚙️ Меню, 🔊
+    const iconWood = this.add.image(18, 19, 'icon-wood').setScale(0.64);
+    this.woodText = this.add.text(31, 12, `0/${MAX_STORAGE}`, {
+      fontSize: '12.5px',
       fontStyle: 'bold',
       color: '#fff8e7',
     });
 
-    const iconStone = this.add.image(118, 19, 'icon-stone').setScale(0.68);
-    this.stoneText = this.add.text(133, 12, `0/${MAX_STORAGE}`, {
-      fontSize: '13px',
+    const iconStone = this.add.image(102, 19, 'icon-stone').setScale(0.64);
+    this.stoneText = this.add.text(115, 12, `0/${MAX_STORAGE}`, {
+      fontSize: '12.5px',
       fontStyle: 'bold',
       color: '#fff8e7',
     });
 
-    const iconFood = this.add.image(216, 19, 'icon-food').setScale(0.68);
-    this.foodText = this.add.text(231, 12, `0/${MAX_STORAGE}`, {
-      fontSize: '13px',
+    const iconFood = this.add.image(186, 19, 'icon-food').setScale(0.64);
+    this.foodText = this.add.text(199, 12, `0/${MAX_STORAGE}`, {
+      fontSize: '12.5px',
       fontStyle: 'bold',
       color: '#fff8e7',
     });
 
-    this.popText = this.add.text(318, 11, `👥 3/${BASE_POP_CAP}`, {
-      fontSize: '13.5px',
+    const iconBone = this.add.image(270, 19, 'icon-bone').setScale(0.64);
+    this.boneText = this.add.text(283, 12, `0/${MAX_STORAGE}`, {
+      fontSize: '12.5px',
+      fontStyle: 'bold',
+      color: '#fef9c3',
+    });
+
+    const iconHide = this.add.image(354, 19, 'icon-hide').setScale(0.64);
+    this.hideText = this.add.text(367, 12, `0/${MAX_STORAGE}`, {
+      fontSize: '12.5px',
+      fontStyle: 'bold',
+      color: '#fed7aa',
+    });
+
+    this.popText = this.add.text(440, 11, `👥 3/${BASE_POP_CAP}`, {
+      fontSize: '12.5px',
       fontStyle: 'bold',
       color: '#ffe066',
     });
 
-    const chiefIcon = this.add.image(448, 19, 'icon-chief-skull').setScale(0.68);
-    this.chiefText = this.add.text(464, 12, 'Без вождя', {
-      fontSize: '12.5px',
+    const chiefIcon = this.add.image(562, 19, 'icon-chief-skull').setScale(0.64);
+    this.chiefText = this.add.text(577, 12, 'Без вождя', {
+      fontSize: '12px',
       fontStyle: 'bold',
       color: '#cbd5e1',
     });
 
-    // Collapsible Storage Drawer toggle button
+    // Collapsible Arsenal Drawer toggle button (Tools, Weapons, Armor, Knowledge)
     this.storageBtnText = this.add
-      .text(596, 19, '📦 Склад ▾', {
-        fontSize: '12px',
+      .text(712, 19, '⚔️ Запаси ▾', {
+        fontSize: '11.5px',
         fontStyle: 'bold',
         color: '#fde68a',
         backgroundColor: '#3b281a',
@@ -594,14 +637,14 @@ export class UIScene extends Phaser.Scene {
       this.events.emit('ui-button-clicked');
       this.isStorageExpanded = !this.isStorageExpanded;
       this.topBarDrawer.setVisible(this.isStorageExpanded);
-      this.storageBtnText.setText(this.isStorageExpanded ? '📦 Склад ▴' : '📦 Склад ▾');
+      this.storageBtnText.setText(this.isStorageExpanded ? '⚔️ Запаси ▴' : '⚔️ Запаси ▾');
       this.drawTopBarBg(this.baseBarWidth);
       this.layoutUI(this.scale.width, this.scale.height);
     });
 
     // Quick Save / Saves Manager button
     const quickSaveBtn = this.add
-      .text(672, 19, '💾', {
+      .text(784, 19, '💾', {
         fontSize: '13px',
         backgroundColor: '#1e3a5f',
         padding: { x: 7, y: 3 },
@@ -616,7 +659,7 @@ export class UIScene extends Phaser.Scene {
 
     // Main Menu button
     const menuBtn = this.add
-      .text(728, 19, '⚙️ Меню', {
+      .text(840, 19, '⚙️ Меню', {
         fontSize: '12px',
         fontStyle: 'bold',
         color: '#86efac',
@@ -632,7 +675,7 @@ export class UIScene extends Phaser.Scene {
       this.openOnlyModal('menu');
     });
 
-    const muteX = 788;
+    const muteX = 898;
     const muteY = 19;
     this.muteBtnBg = this.add.graphics().setPosition(muteX, muteY);
     this.drawMuteButtonBg(false);
@@ -649,67 +692,49 @@ export class UIScene extends Phaser.Scene {
       this.muteBtnText.setText(muted ? '🔇' : '🔊');
     });
 
-    // Row 2 Collapsible Drawer: Bone, Hide, Tools, Spears, Bows, Clubs, Hide Armor, Bone Armor, Knowledge
+    // Row 2 Collapsible Drawer: Tools, Spears, Bows, Clubs, Hide Armor, Bone Armor, Knowledge
     this.topBarDrawer = this.add.container(0, 0);
-    const iconBone = this.add.image(18, 50, 'icon-bone').setScale(0.62);
-    this.boneText = this.add.text(31, 43, `0/${MAX_STORAGE}`, {
-      fontSize: '11.5px',
-      fontStyle: 'bold',
-      color: '#fef9c3',
-    });
-
-    const iconHide = this.add.image(102, 50, 'icon-hide').setScale(0.62);
-    this.hideText = this.add.text(115, 43, `0/${MAX_STORAGE}`, {
-      fontSize: '11.5px',
-      fontStyle: 'bold',
-      color: '#fed7aa',
-    });
-
-    const iconTools = this.add.image(186, 50, 'icon-tools').setScale(0.58);
-    this.toolsText = this.add.text(198, 43, 'Інстр: 0', {
-      fontSize: '11.5px',
+    const iconTools = this.add.image(22, 50, 'icon-tools').setScale(0.6);
+    this.toolsText = this.add.text(35, 43, 'Інстр: 0', {
+      fontSize: '12px',
       fontStyle: 'bold',
       color: '#38bdf8',
     });
 
-    this.spearText = this.add.text(272, 43, '🔱 Списи: 0', {
-      fontSize: '11.5px',
+    this.spearText = this.add.text(132, 43, '🔱 Списи: 0', {
+      fontSize: '12px',
       fontStyle: 'bold',
       color: '#e2e8f0',
     });
-    this.bowText = this.add.text(364, 43, '🏹 Луки: 0', {
-      fontSize: '11.5px',
+    this.bowText = this.add.text(246, 43, '🏹 Луки: 0', {
+      fontSize: '12px',
       fontStyle: 'bold',
       color: '#fde68a',
     });
-    this.clubText = this.add.text(448, 43, '🦴 Палиці: 0', {
-      fontSize: '11.5px',
+    this.clubText = this.add.text(356, 43, '🦴 Палиці: 0', {
+      fontSize: '12px',
       fontStyle: 'bold',
       color: '#fca5a5',
     });
-    this.hideArmorText = this.add.text(534, 43, '🧥 Шк.бр: 0', {
-      fontSize: '11.5px',
+    this.hideArmorText = this.add.text(482, 43, '🧥 Шк.бр: 0', {
+      fontSize: '12px',
       fontStyle: 'bold',
       color: '#fdba74',
     });
-    this.boneArmorText = this.add.text(622, 43, '🛡️ Кіст.бр: 0', {
-      fontSize: '11.5px',
+    this.boneArmorText = this.add.text(612, 43, '🛡️ Кіст.бр: 0', {
+      fontSize: '12px',
       fontStyle: 'bold',
       color: '#f8fafc',
     });
 
-    const iconKnow = this.add.image(742, 50, 'icon-knowledge').setScale(0.58);
-    this.knowledgeText = this.add.text(756, 43, '✨ 0', {
-      fontSize: '11.5px',
+    const iconKnow = this.add.image(772, 50, 'icon-knowledge').setScale(0.6);
+    this.knowledgeText = this.add.text(786, 43, '✨ 0', {
+      fontSize: '12px',
       fontStyle: 'bold',
       color: '#67e8f9',
     });
 
     this.topBarDrawer.add([
-      iconBone,
-      this.boneText,
-      iconHide,
-      this.hideText,
       iconTools,
       this.toolsText,
       this.spearText,
@@ -731,6 +756,10 @@ export class UIScene extends Phaser.Scene {
       this.stoneText,
       iconFood,
       this.foodText,
+      iconBone,
+      this.boneText,
+      iconHide,
+      this.hideText,
       this.popText,
       chiefIcon,
       this.chiefText,
@@ -999,12 +1028,18 @@ export class UIScene extends Phaser.Scene {
     g.fillStyle(m.fogEnabled ? 0x162218 : 0x2d5424, 1);
     g.fillRoundedRect(0, 0, mapW, mapH, 5);
 
-    // Real River(s) & Fords on Minimap
+    // Real River(s), Fords & Bridges on Minimap
     if (m.riverPoints && m.riverPoints.length > 0) {
       for (const rp of m.riverPoints) {
         const rPx = Math.max(1.8, rp.radius * sx);
         g.fillStyle(rp.isFord ? 0x94a3b8 : 0x0ea5e9, 0.92);
         g.fillCircle(rp.x * sx, rp.y * sy, rPx);
+      }
+    }
+    if (m.bridges && m.bridges.length > 0) {
+      for (const br of m.bridges) {
+        g.fillStyle(0xd97706, 1);
+        g.fillRect(br.x * sx - 3, br.y * sy - 2, 6, 4);
       }
     }
 
@@ -1045,6 +1080,24 @@ export class UIScene extends Phaser.Scene {
     for (const u of m.playerUnits) {
       g.fillStyle(u.selected ? 0xfef08a : u.isWarrior ? 0x38bdf8 : 0xecfccb, 1);
       g.fillCircle(u.x * sx, u.y * sy, u.selected ? 2.4 : 1.8);
+    }
+
+    // Fog of War overlay on Minimap
+    if (m.fogEnabled && m.fogGrid) {
+      const cw = mapW / m.fogGrid.cols;
+      const ch = mapH / m.fogGrid.rows;
+      for (let r = 0; r < m.fogGrid.rows; r++) {
+        for (let c = 0; c < m.fogGrid.cols; c++) {
+          const st = m.fogGrid.cells[r * m.fogGrid.cols + c];
+          if (st === 0) {
+            g.fillStyle(0x080b09, 1);
+            g.fillRect(c * cw, r * ch, cw + 0.5, ch + 0.5);
+          } else if (st === 1) {
+            g.fillStyle(0x0a0e0b, 0.52);
+            g.fillRect(c * cw, r * ch, cw + 0.5, ch + 0.5);
+          }
+        }
+      }
     }
 
     // Camera viewport rect
@@ -1210,7 +1263,7 @@ export class UIScene extends Phaser.Scene {
       color: '#ffe066',
     });
     this.unitGenderBadge = this.add
-      .text(this.cardWidth - 40, 10, '', {
+      .text(this.cardWidth - 46, 10, '', {
         fontSize: '10.5px',
         fontStyle: 'bold',
         color: '#f2e8cf',
@@ -1220,12 +1273,12 @@ export class UIScene extends Phaser.Scene {
       .setOrigin(1, 0);
 
     const deselectBtn = this.add
-      .text(this.cardWidth - 12, 10, '✕', {
-        fontSize: '11px',
+      .text(this.cardWidth - 8, 7, '✕', {
+        fontSize: '14px',
         fontStyle: 'bold',
-        color: '#fca5a5',
-        backgroundColor: '#3b1d14',
-        padding: { x: 5, y: 2 },
+        color: '#fecaca',
+        backgroundColor: '#5c1d1d',
+        padding: { x: 8, y: 4 },
       })
       .setOrigin(1, 0)
       .setInteractive({ useHandCursor: true });
@@ -1348,6 +1401,9 @@ export class UIScene extends Phaser.Scene {
     bg.lineStyle(2, 0xc98a4b, 0.95);
     bg.strokeRoundedRect(0, 0, w, h, 14);
 
+    const groupBlocker = this.add.zone(w / 2, h / 2, w, h).setInteractive();
+    groupBlocker.on('pointerdown', () => this.events.emit('ui-button-clicked'));
+
     this.groupTitleText = this.add.text(14, 12, 'Виділено загін: 0', {
       fontSize: '15px',
       fontStyle: 'bold',
@@ -1395,6 +1451,7 @@ export class UIScene extends Phaser.Scene {
 
     this.groupPanel.add([
       bg,
+      groupBlocker,
       this.groupTitleText,
       clearBtn,
       this.groupStatsText,
@@ -1544,6 +1601,9 @@ export class UIScene extends Phaser.Scene {
     bg.lineStyle(2, 0xf97316, 0.95);
     bg.strokeRoundedRect(0, 0, w, h, 14);
 
+    const blocker = this.add.zone(w / 2, h / 2, w, h).setInteractive();
+    blocker.on('pointerdown', () => this.events.emit('ui-button-clicked'));
+
     const title = this.add.text(14, 10, '🔥 Головне вогнище племені', {
       fontSize: '14.5px',
       fontStyle: 'bold',
@@ -1595,6 +1655,7 @@ export class UIScene extends Phaser.Scene {
 
     this.campfirePanel.add([
       bg,
+      blocker,
       title,
       closeBtn,
       desc,
@@ -1618,7 +1679,7 @@ export class UIScene extends Phaser.Scene {
 
   private createBuildModal(): void {
     const w = 756;
-    const h = 476;
+    const h = 456;
     this.buildModalContainer = this.add.container(0, 0).setDepth(4800);
 
     const scrim = this.add.rectangle(0, 0, 3200, 3200, 0x0a0704, 0.68).setInteractive();
@@ -1630,7 +1691,7 @@ export class UIScene extends Phaser.Scene {
     bg.lineStyle(2.4, 0xd99b52, 0.96);
     bg.strokeRoundedRect(-w / 2, -h / 2, w, h, 18);
 
-    const title = this.add.text(-w / 2 + 22, -h / 2 + 14, '🏗️ Вікно будівництва племені (13 споруд)', {
+    const title = this.add.text(-w / 2 + 22, -h / 2 + 14, '🏗️ Вікно будівництва племені (14 споруд)', {
       fontSize: '18px',
       fontStyle: 'bold',
       color: '#ffe066',
@@ -1654,11 +1715,11 @@ export class UIScene extends Phaser.Scene {
     this.buildModalContainer.add([scrim, bg, title, closeBtn]);
 
     const cardW = 232;
-    const cardH = 74;
+    const cardH = 68;
     const gapX = 10;
-    const gapY = 8;
+    const gapY = 7;
     const startX = -w / 2 + 20;
-    const startY = -h / 2 + 52;
+    const startY = -h / 2 + 50;
 
     BUILD_ORDER.forEach((type, idx) => {
       const def = BUILDING_DEFS[type];
@@ -1670,22 +1731,22 @@ export class UIScene extends Phaser.Scene {
       const card = this.add.container(cx, cy);
       const cBg = this.add.graphics();
       const iconKey = this.textures.exists(`icon-${type}`) ? `icon-${type}` : 'icon-hut';
-      const icon = this.add.image(24, 37, iconKey).setScale(0.82);
-      const titleText = this.add.text(48, 6, def.nameUk, {
-        fontSize: '12px',
+      const icon = this.add.image(23, 34, iconKey).setScale(0.78);
+      const titleText = this.add.text(46, 5, def.nameUk, {
+        fontSize: '11.5px',
         fontStyle: 'bold',
         color: '#ffe066',
       });
-      const descText = this.add.text(48, 23, def.descUk, {
-        fontSize: '9.5px',
+      const descText = this.add.text(46, 20, def.descUk, {
+        fontSize: '9px',
         color: '#e6ccb2',
-        wordWrap: { width: cardW - 54 },
+        wordWrap: { width: cardW - 52 },
       });
       const costs: string[] = [`🪵${def.wood}`, `🪨${def.stone}`];
       if (def.bone) costs.push(`🦴${def.bone}`);
       if (def.hide) costs.push(`🧥${def.hide}`);
-      const costText = this.add.text(48, 56, costs.join(' '), {
-        fontSize: '10.5px',
+      const costText = this.add.text(46, 50, costs.join(' '), {
+        fontSize: '10px',
         fontStyle: 'bold',
         color: '#a7f3d0',
       });
@@ -1726,7 +1787,7 @@ export class UIScene extends Phaser.Scene {
 
   private refreshBuildModal(): void {
     const cardW = 232;
-    const cardH = 74;
+    const cardH = 68;
     for (const ref of this.buildModalCards) {
       const def = BUILDING_DEFS[ref.type];
       const ok =
@@ -1916,15 +1977,20 @@ export class UIScene extends Phaser.Scene {
     bg.lineStyle(2, 0xc98a4b, 0.95);
     bg.strokeRoundedRect(0, 0, this.buildingPanelW, this.buildingPanelH, 14);
 
+    const bPanelBlocker = this.add
+      .zone(this.buildingPanelW / 2, this.buildingPanelH / 2, this.buildingPanelW, this.buildingPanelH)
+      .setInteractive();
+    bPanelBlocker.on('pointerdown', () => this.events.emit('ui-button-clicked'));
+
     this.buildingTitleText = this.add.text(14, 10, '', {
       fontSize: '14.5px',
       fontStyle: 'bold',
       color: '#ffe066',
     });
 
-    // Demolish button (for palisades and any tribe building)
+    // Demolish button (for palisades, bridges, and any tribe building)
     this.demolishBtn = this.add
-      .text(this.buildingPanelW - 38, 10, '🗑️ Зруйнувати', {
+      .text(this.buildingPanelW - 42, 10, '🗑️ Зруйнувати', {
         fontSize: '10.5px',
         fontStyle: 'bold',
         color: '#fca5a5',
@@ -1941,14 +2007,16 @@ export class UIScene extends Phaser.Scene {
     });
 
     const closeText = this.add
-      .text(this.buildingPanelW - 12, 10, '✕', {
+      .text(this.buildingPanelW - 10, 8, '✕', {
         fontSize: '14px',
         fontStyle: 'bold',
-        color: '#fca5a5',
+        color: '#fecaca',
+        backgroundColor: '#5c1d1d',
+        padding: { x: 6, y: 2 },
       })
       .setOrigin(1, 0);
     const closeHit = this.add
-      .zone(this.buildingPanelW - 18, 18, 24, 24)
+      .zone(this.buildingPanelW - 18, 18, 36, 32)
       .setInteractive({ useHandCursor: true });
     closeHit.on('pointerdown', () => {
       this.events.emit('ui-button-clicked');
@@ -1964,6 +2032,7 @@ export class UIScene extends Phaser.Scene {
       fontSize: '10.5px',
       fontStyle: 'bold',
       color: '#fde68a',
+      wordWrap: { width: this.buildingPanelW - 28 },
     });
     this.buildingWorkerText = this.add.text(14, 78, '', {
       fontSize: '10.5px',
@@ -1976,10 +2045,10 @@ export class UIScene extends Phaser.Scene {
     this.assignBtnGroup = this.add.container(0, 0);
     this.assignBtnBg = this.add.graphics();
     this.assignBtnText = this.add
-      .text(102, 122, 'Призначити', { fontSize: '11px', fontStyle: 'bold', color: '#fef08a' })
+      .text(88, 122, 'Призначити', { fontSize: '10.5px', fontStyle: 'bold', color: '#fef08a' })
       .setOrigin(0.5);
     const assignHit = this.add
-      .zone(102, 122, 176, 24)
+      .zone(88, 122, 148, 24)
       .setInteractive({ useHandCursor: true });
     assignHit.on('pointerover', () => {
       this.isAssignHovered = true;
@@ -1998,10 +2067,10 @@ export class UIScene extends Phaser.Scene {
     this.assignBtnGroup.add([this.assignBtnBg, this.assignBtnText, assignHit]);
     this.drawAssignButtonBg();
 
-    // Profile Roster Picker button (assign any adult from a list without searching the map!)
+    // Profile Roster Picker button (assign any adult/warrior from a list without searching the map!)
     this.rosterPickBtn = this.add
-      .text(this.buildingPanelW - 14, 122, '👤 Список жителів', {
-        fontSize: '11px',
+      .text(this.buildingPanelW - 14, 122, '👤 Список', {
+        fontSize: '10.5px',
         fontStyle: 'bold',
         color: '#86efac',
         backgroundColor: '#1e3a29',
@@ -2015,6 +2084,25 @@ export class UIScene extends Phaser.Scene {
       this.rosterPage = 0;
       this.openOnlyModal('roster');
     });
+
+    // Unassign workers button (explicit removal from station / watchtower)
+    this.unassignBtn = this.add
+      .text(this.buildingPanelW - 14, 122, '🔄 Зняти', {
+        fontSize: '10.5px',
+        fontStyle: 'bold',
+        color: '#fed7aa',
+        backgroundColor: '#5c2818',
+        padding: { x: 8, y: 4 },
+      })
+      .setOrigin(1, 0.5)
+      .setInteractive({ useHandCursor: true });
+    this.unassignBtn.on('pointerdown', () => {
+      if (!this.latestBuilding) return;
+      SoundFX.unlock();
+      this.events.emit('ui-button-clicked');
+      this.events.emit('unassign-building-workers', this.latestBuilding.id);
+    });
+    this.unassignBtn.setVisible(false);
 
     // Barracks warrior controls (target warrior count ➖ / ➕ + 3 warrior classes)
     this.barracksGroup = this.add.container(0, 0);
@@ -2119,6 +2207,7 @@ export class UIScene extends Phaser.Scene {
 
     this.buildingPanel.add([
       bg,
+      bPanelBlocker,
       this.buildingTitleText,
       this.demolishBtn,
       closeText,
@@ -2128,6 +2217,7 @@ export class UIScene extends Phaser.Scene {
       this.buildingWorkerText,
       this.assignBtnGroup,
       this.rosterPickBtn,
+      this.unassignBtn,
       this.barracksGroup,
       this.totemTechBtn,
       this.burialChronicleBtn,
@@ -2138,9 +2228,9 @@ export class UIScene extends Phaser.Scene {
   private drawAssignButtonBg(): void {
     this.assignBtnBg.clear();
     this.assignBtnBg.fillStyle(this.isAssignHovered ? 0x166534 : 0x14532d, 0.96);
-    this.assignBtnBg.fillRoundedRect(14, 110, 176, 24, 7);
+    this.assignBtnBg.fillRoundedRect(14, 110, 148, 24, 7);
     this.assignBtnBg.lineStyle(1.4, 0x4ade80, this.isAssignHovered ? 1 : 0.85);
-    this.assignBtnBg.strokeRoundedRect(14, 110, 176, 24, 7);
+    this.assignBtnBg.strokeRoundedRect(14, 110, 148, 24, 7);
   }
 
   private refreshBuildingPanel(): void {
@@ -2161,18 +2251,26 @@ export class UIScene extends Phaser.Scene {
         `Воїни племені: ${b.warriorSlotsUsed ?? 0} / ${b.warriorSlotsMax ?? 0}`
       );
       this.barracksTargetText.setText(`Ліміт: ${b.targetWarriors ?? 5}`);
-      this.buildingWorkerText.setText(
-        this.latestSnapshot && !this.latestSnapshot.isChild
-          ? `Обрано: ${this.latestSnapshot.name} (оберіть клас воїна нижче)`
-          : 'Оберіть жителя на карті або через «👤 Список жителів»'
-      );
+      this.buildingWorkerText
+        .setText(
+          this.latestSnapshot && !this.latestSnapshot.isChild
+            ? `Обрано: ${this.latestSnapshot.name} (оберіть клас воїна нижче)`
+            : 'Оберіть жителя на карті або через «👤 Список»'
+        )
+        .setColor('#bae6fd');
       this.assignBtnGroup.setVisible(false);
-      this.rosterPickBtn.setVisible(true);
+      this.unassignBtn.setVisible(false);
+      this.rosterPickBtn
+        .setText('👤 Список жителів')
+        .setPosition(this.buildingPanelW - 14, 114)
+        .setOrigin(1, 0.5)
+        .setVisible(true);
       this.barracksGroup.setVisible(true);
     } else if (b.type === 'nursery') {
       this.barracksGroup.setVisible(false);
       this.assignBtnGroup.setVisible(false);
       this.rosterPickBtn.setVisible(false);
+      this.unassignBtn.setVisible(false);
       const kids = b.childrenInside ?? [];
       this.buildingStatusText.setText(`👶 Дітей у Яслах: ${kids.length}`);
       this.buildingWorkerText
@@ -2182,16 +2280,50 @@ export class UIScene extends Phaser.Scene {
             : 'Діти автоматично приходять сюди до 14 років'
         )
         .setColor('#86efac');
+    } else if (b.type === 'granary') {
+      this.barracksGroup.setVisible(false);
+      this.assignBtnGroup.setVisible(false);
+      this.rosterPickBtn.setVisible(false);
+      this.unassignBtn.setVisible(false);
+      const cap = this.latestResources.storageCap || MAX_STORAGE;
+      this.buildingStatusText.setText(
+        `📦 Загальний склад племені (+80 ліміту • ${b.hp ?? 380}/${b.maxHp ?? 380} HP)`
+      );
+      this.buildingWorkerText
+        .setText(
+          `🪵 ${this.latestResources.wood}  🪨 ${this.latestResources.stone}  🍖 ${this.latestResources.food}  🦴 ${this.latestResources.bone}  🧥 ${this.latestResources.hide}  (макс. ${cap})`
+        )
+        .setColor('#a7f3d0');
+    } else if (b.type === 'bridge') {
+      this.barracksGroup.setVisible(false);
+      this.assignBtnGroup.setVisible(false);
+      this.rosterPickBtn.setVisible(false);
+      this.unassignBtn.setVisible(false);
+      this.buildingStatusText.setText(
+        `🌉 Переправа через річку (Міцн.: ${b.hp ?? 380}/${b.maxHp ?? 380} HP)`
+      );
+      this.buildingWorkerText
+        .setText('Жителі й воїни автоматично переходять річку по мосту')
+        .setColor('#86efac');
     } else {
       this.barracksGroup.setVisible(false);
-      if (b.type === 'totem' && (b.captivesCount ?? 0) > 0) {
+      if (b.type === 'workshop') {
+        const stock = b.toolsInStock ?? this.latestResources.tools;
+        const equipped = b.toolsEquipped ?? 0;
+        const target = b.toolsTarget ?? this.population.count + 5;
+        this.buildingStatusText.setText(
+          `🛠️ Інструменти: запас ${stock} • у жителів ${equipped} (ціль ${target})`
+        );
+      } else if (b.type === 'watchtower') {
+        this.buildingStatusText.setText(
+          `🏹 Пост (лише Воїни): ${b.garrisonedWarriorName ? `чатує ${b.garrisonedWarriorName}` : 'порожньо'} • ${b.hp ?? 480}/${b.maxHp ?? 480} HP`
+        );
+      } else if (b.type === 'totem' && (b.captivesCount ?? 0) > 0) {
         this.buildingStatusText.setText(
           `🌀 Навернених збирачів біля Тотема: ${b.captivesCount} (чекають зміну сезону)`
         );
       } else if (b.statusNote) {
         this.buildingStatusText.setText(b.statusNote);
-      } else if (b.hp !== undefined && b.maxHp !== undefined && b.hp < b.maxHp) {
-        this.buildingStatusText.setText(`Міцність: ${b.hp}/${b.maxHp} HP`);
       } else {
         this.buildingStatusText.setText(`Міцність: ${b.hp ?? 380}/${b.maxHp ?? 380} HP`);
       }
@@ -2200,9 +2332,14 @@ export class UIScene extends Phaser.Scene {
         const listStr = b.assignedWorkers
           .map((w) => `${w.name} (Рів.${w.level})`)
           .join(', ');
+        const extraNote = b.type === 'workshop' && b.statusNote ? ` • ${b.statusNote}` : '';
         this.buildingWorkerText
-          .setText(`Працюють (${b.assignedWorkers.length}/${b.maxWorkers}): ${listStr}`)
+          .setText(`Працюють (${b.assignedWorkers.length}/${b.maxWorkers}): ${listStr}${extraNote}`)
           .setColor('#a7f3d0');
+      } else if (b.type === 'watchtower') {
+        this.buildingWorkerText
+          .setText('Вільно (0/1) — призначте Воїна з казарми для стрільби з лука')
+          .setColor('#fde68a');
       } else if (b.profession) {
         this.buildingWorkerText
           .setText(`Вільно (0/${b.maxWorkers}) — призначте жителя`)
@@ -2212,8 +2349,33 @@ export class UIScene extends Phaser.Scene {
       }
 
       if (b.profession) {
-        this.rosterPickBtn.setVisible(true);
-        if (this.latestSnapshot && !this.latestSnapshot.isChild && !this.latestSnapshot.isDying) {
+        const hasWorkers = b.assignedWorkers.length > 0;
+        this.unassignBtn.setVisible(hasWorkers);
+        if (hasWorkers) {
+          this.rosterPickBtn
+            .setText('👤 Список')
+            .setPosition(222, 122)
+            .setOrigin(0.5, 0.5)
+            .setVisible(true);
+        } else {
+          this.rosterPickBtn
+            .setText('👤 Список жителів')
+            .setPosition(this.buildingPanelW - 14, 122)
+            .setOrigin(1, 0.5)
+            .setVisible(true);
+        }
+
+        if (b.type === 'watchtower') {
+          if (this.latestSnapshot && this.latestSnapshot.warriorClass) {
+            this.assignBtnText.setText(`🏹 На вежу: ${this.latestSnapshot.name}`);
+          } else {
+            this.assignBtnText.setText('🏹 Призначити воїна');
+          }
+        } else if (
+          this.latestSnapshot &&
+          !this.latestSnapshot.isChild &&
+          !this.latestSnapshot.isDying
+        ) {
           this.assignBtnText.setText(`Призначити: ${this.latestSnapshot.name}`);
         } else {
           this.assignBtnText.setText('Призначити виділеного');
@@ -2222,6 +2384,7 @@ export class UIScene extends Phaser.Scene {
       } else {
         this.assignBtnGroup.setVisible(false);
         this.rosterPickBtn.setVisible(false);
+        this.unassignBtn.setVisible(false);
       }
     }
 
@@ -2271,6 +2434,86 @@ export class UIScene extends Phaser.Scene {
     });
 
     this.rosterListContainer = this.add.container(0, 0);
+    this.rosterEmptyText = this.add
+      .text(0, 0, '', {
+        fontSize: '14px',
+        color: '#fde68a',
+        align: 'center',
+        wordWrap: { width: 540 },
+      })
+      .setOrigin(0.5);
+    this.rosterEmptyText.setVisible(false);
+
+    // Pre-allocate 5 persistent interactive rows so 220ms roster updates never destroy buttons mid-click!
+    const rowW = 596;
+    const rowH = 60;
+    const startY = -158;
+    for (let idx = 0; idx < 5; idx++) {
+      const ry = startY + idx * (rowH + 6);
+      const row = this.add.container(-rowW / 2, ry);
+
+      const rBg = this.add.graphics();
+      rBg.fillStyle(0x160f09, 0.94);
+      rBg.fillRoundedRect(0, 0, rowW, rowH, 10);
+      rBg.lineStyle(1.4, 0xc98a4b, 0.85);
+      rBg.strokeRoundedRect(0, 0, rowW, rowH, 10);
+
+      const portrait = this.add.image(32, 30, 'portrait-male-1').setScale(0.36);
+      const nameTxt = this.add.text(64, 8, '', {
+        fontSize: '12.5px',
+        fontStyle: 'bold',
+        color: '#fde68a',
+      });
+      const statusTxt = this.add.text(64, 30, '', {
+        fontSize: '11px',
+        color: '#cbd5e1',
+      });
+      const assignBtn = this.add
+        .text(rowW - 14, 30, '✅ Призначити сюди', {
+          fontSize: '11.5px',
+          fontStyle: 'bold',
+          color: '#fef08a',
+          backgroundColor: '#166534',
+          padding: { x: 10, y: 6 },
+        })
+        .setOrigin(1, 0.5)
+        .setInteractive({ useHandCursor: true });
+
+      const ref: RosterRowRef = {
+        container: row,
+        rBg,
+        portrait,
+        nameTxt,
+        statusTxt,
+        assignBtn,
+        villagerId: '',
+      };
+
+      assignBtn.on('pointerdown', () => {
+        if (!ref.villagerId) return;
+        SoundFX.unlock();
+        this.events.emit('ui-button-clicked');
+        const b = this.latestBuilding;
+        if (b && b.type === 'barracks') {
+          this.events.emit('select-villager-by-id', ref.villagerId);
+          this.rosterModalContainer.setVisible(false);
+        } else if (b && b.profession) {
+          this.events.emit('assign-villager-by-id', {
+            buildingId: b.id,
+            villagerId: ref.villagerId,
+          });
+          this.rosterModalContainer.setVisible(false);
+        } else {
+          this.events.emit('select-villager-by-id', ref.villagerId);
+          this.rosterModalContainer.setVisible(false);
+        }
+      });
+
+      row.add([rBg, portrait, nameTxt, statusTxt, assignBtn]);
+      row.setVisible(false);
+      this.rosterRows.push(ref);
+      this.rosterListContainer.add(row);
+    }
 
     const prevBtn = this.add
       .text(-110, h / 2 - 26, '◀ Попередня', {
@@ -2310,7 +2553,8 @@ export class UIScene extends Phaser.Scene {
       .setInteractive({ useHandCursor: true });
     nextBtn.on('pointerdown', () => {
       this.events.emit('ui-button-clicked');
-      const totalPages = Math.max(1, Math.ceil(this.latestRoster.length / 5));
+      const items = this.getFilteredRosterItems();
+      const totalPages = Math.max(1, Math.ceil(items.length / 5));
       if (this.rosterPage + 1 < totalPages) {
         this.rosterPage += 1;
         this.refreshRosterModal();
@@ -2322,6 +2566,7 @@ export class UIScene extends Phaser.Scene {
       bg,
       this.rosterTitleText,
       closeBtn,
+      this.rosterEmptyText,
       this.rosterListContainer,
       prevBtn,
       this.rosterPageText,
@@ -2330,106 +2575,79 @@ export class UIScene extends Phaser.Scene {
     this.rosterModalContainer.setVisible(false);
   }
 
+  private getFilteredRosterItems(): VillagerRosterItem[] {
+    if (this.latestBuilding?.type === 'watchtower') {
+      return this.latestRoster.filter((v) => v.warriorClass !== null);
+    }
+    return this.latestRoster;
+  }
+
   private refreshRosterModal(): void {
-    this.rosterListContainer.removeAll(true);
     const b = this.latestBuilding;
     const prof: ProfessionId | null = b?.profession ?? null;
     this.rosterTitleText.setText(
-      b ? `👤 Призначення в «${b.nameUk}» — оберіть жителя:` : '👤 Жителі племені'
+      b?.type === 'watchtower'
+        ? `🏹 Призначення на «${b.nameUk}» — лише Воїни:`
+        : b
+        ? `👤 Призначення в «${b.nameUk}» — оберіть жителя:`
+        : '👤 Жителі племені'
     );
 
+    const items = this.getFilteredRosterItems();
     const perPage = 5;
-    const totalPages = Math.max(1, Math.ceil(this.latestRoster.length / perPage));
+    const totalPages = Math.max(1, Math.ceil(items.length / perPage));
     this.rosterPage = Phaser.Math.Clamp(this.rosterPage, 0, totalPages - 1);
     this.rosterPageText.setText(`${this.rosterPage + 1} / ${totalPages}`);
 
-    const slice = this.latestRoster.slice(
-      this.rosterPage * perPage,
-      (this.rosterPage + 1) * perPage
-    );
+    if (items.length === 0) {
+      this.rosterEmptyText
+        .setText(
+          b?.type === 'watchtower'
+            ? 'У племені ще немає воїнів!\nСпочатку навчіть воїна у Казармі, щоб поставити його на Сторожову вежу.'
+            : 'Немає доступних дорослих жителів.'
+        )
+        .setVisible(true);
+    } else {
+      this.rosterEmptyText.setVisible(false);
+    }
 
-    const rowW = 596;
-    const rowH = 60;
-    const startY = -158;
+    const slice = items.slice(this.rosterPage * perPage, (this.rosterPage + 1) * perPage);
+    const actionLabel =
+      b && b.type === 'barracks'
+        ? '⚔️ Обрати для казарми'
+        : b && b.type === 'watchtower'
+        ? '🏹 Поставити на вежу'
+        : b && b.profession
+        ? '✅ Призначити сюди'
+        : '👁️ Виділити';
 
-    slice.forEach((v, idx) => {
-      const ry = startY + idx * (rowH + 6);
-      const row = this.add.container(-rowW / 2, ry);
-
-      const rBg = this.add.graphics();
-      rBg.fillStyle(0x160f09, 0.94);
-      rBg.fillRoundedRect(0, 0, rowW, rowH, 10);
-      rBg.lineStyle(1.4, 0xc98a4b, 0.85);
-      rBg.strokeRoundedRect(0, 0, rowW, rowH, 10);
-
+    this.rosterRows.forEach((row, idx) => {
+      const v = slice[idx];
+      if (!v) {
+        row.villagerId = '';
+        row.container.setVisible(false);
+        return;
+      }
+      row.villagerId = v.id;
       const pKey =
         v.lifeStage === 'ELDER' ? `portrait-${v.appearance}-elder` : `portrait-${v.appearance}`;
-      const portrait = this.add.image(32, 30, pKey).setScale(0.36);
+      row.portrait.setTexture(pKey);
 
       const skillLvl = prof ? v.skills[prof] ?? 1 : v.topProfessionLevel;
-      const skillText = prof
+      const skillText = v.warriorClass
+        ? `${WARRIOR_CLASS_LABELS_UK[v.warriorClass]} (Рів.${v.skills.warrior ?? 1})`
+        : prof
         ? `Навичка (${b?.professionLabel}): Рів.${skillLvl}`
         : `Найкраща: ${v.topProfessionLabel} Рів.${v.topProfessionLevel}`;
 
-      const nameTxt = this.add.text(
-        64,
-        8,
-        `${v.isChief ? '💀 ' : ''}${v.name} (${v.age} р.) • ${skillText}`,
-        {
-          fontSize: '12.5px',
-          fontStyle: 'bold',
-          color: '#fde68a',
-        }
+      row.nameTxt.setText(
+        `${v.isChief ? '💀 ' : ''}${v.name} (${v.age} р.) • ${skillText}`
       );
-
-      const statusTxt = this.add.text(
-        64,
-        30,
-        `Стан: ${v.stateLabel}${v.assignedBuildingName ? ` • Призначений: ${v.assignedBuildingName}` : ''}`,
-        {
-          fontSize: '11px',
-          color: '#cbd5e1',
-        }
+      row.statusTxt.setText(
+        `Стан: ${v.stateLabel}${v.assignedBuildingName ? ` • Призначений: ${v.assignedBuildingName}` : ''}`
       );
-
-      const actionLabel =
-        b && b.type === 'barracks'
-          ? '⚔️ Обрати для казарми'
-          : b && b.profession
-          ? '✅ Призначити сюди'
-          : '👁️ Виділити';
-
-      const assignBtn = this.add
-        .text(rowW - 14, 30, actionLabel, {
-          fontSize: '11.5px',
-          fontStyle: 'bold',
-          color: '#fef08a',
-          backgroundColor: '#166534',
-          padding: { x: 10, y: 6 },
-        })
-        .setOrigin(1, 0.5)
-        .setInteractive({ useHandCursor: true });
-
-      assignBtn.on('pointerdown', () => {
-        SoundFX.unlock();
-        this.events.emit('ui-button-clicked');
-        if (b && b.type === 'barracks') {
-          this.events.emit('select-villager-by-id', v.id);
-          this.rosterModalContainer.setVisible(false);
-        } else if (b && b.profession) {
-          this.events.emit('assign-villager-by-id', {
-            buildingId: b.id,
-            villagerId: v.id,
-          });
-          this.rosterModalContainer.setVisible(false);
-        } else {
-          this.events.emit('select-villager-by-id', v.id);
-          this.rosterModalContainer.setVisible(false);
-        }
-      });
-
-      row.add([rBg, portrait, nameTxt, statusTxt, assignBtn]);
-      this.rosterListContainer.add(row);
+      row.assignBtn.setText(actionLabel);
+      row.container.setVisible(true);
     });
   }
 
@@ -2475,154 +2693,181 @@ export class UIScene extends Phaser.Scene {
     });
 
     this.diplomacyBodyContainer = this.add.container(0, 0);
+    this.diplomacyEmptyText = this.add
+      .text(
+        0,
+        0,
+        'Ви ще не зустріли інших племен.\nРозвідуйте карту збирачами або воїнами — щойно ви зустрінете\nінше плем’я, тут відкриються переговори, ненапад на 4 сезони, союз і торгівля!',
+        {
+          fontSize: '14px',
+          color: '#e6ccb2',
+          align: 'center',
+        }
+      )
+      .setOrigin(0.5);
+    this.diplomacyEmptyText.setVisible(false);
 
-    this.diplomacyModalContainer.add([scrim, bg, title, closeBtn, this.diplomacyBodyContainer]);
+    // Pre-allocate 3 persistent rival cards so 220ms rival updates never destroy interactive buttons!
+    const cardW = 654;
+    const cardH = 112;
+    const startY = -156;
+    const tradeDefs: Array<{
+      label: string;
+      giveType: 'wood' | 'stone' | 'food';
+      receiveType: 'wood' | 'stone' | 'food' | 'bone' | 'hide';
+      x: number;
+    }> = [
+      { label: '⚖️ 15🪵 → 12🍖', giveType: 'wood', receiveType: 'food', x: 14 },
+      { label: '⚖️ 15🪨 → 12🪵', giveType: 'stone', receiveType: 'wood', x: 148 },
+      { label: '⚖️ 15🍖 → 12🪨', giveType: 'food', receiveType: 'stone', x: 282 },
+      { label: '⚖️ 15🪵 → 10🦴', giveType: 'wood', receiveType: 'bone', x: 416 },
+      { label: '⚖️ 15🪨 → 10🧥', giveType: 'stone', receiveType: 'hide', x: 538 },
+    ];
+
+    for (let idx = 0; idx < 3; idx++) {
+      const cy = startY + idx * (cardH + 10);
+      const card = this.add.container(-cardW / 2, cy);
+      const cBg = this.add.graphics();
+      const header = this.add.text(14, 10, '', {
+        fontSize: '13px',
+        fontStyle: 'bold',
+        color: '#fde68a',
+      });
+      const status = this.add.text(14, 32, '', {
+        fontSize: '11.5px',
+        color: '#bae6fd',
+      });
+      const resLine = this.add.text(14, 52, '', {
+        fontSize: '11px',
+        color: '#d6c2a8',
+      });
+
+      const pactBtn = this.add
+        .text(14, 76, '🕊️ Пакт про ненапад (4 сезони)', {
+          fontSize: '11px',
+          fontStyle: 'bold',
+          color: '#fef08a',
+          backgroundColor: '#1e3a5f',
+          padding: { x: 8, y: 5 },
+        })
+        .setInteractive({ useHandCursor: true });
+
+      const allyBtn = this.add
+        .text(238, 76, '🤝 Укласти Союз (відкрити торгівлю)', {
+          fontSize: '11px',
+          fontStyle: 'bold',
+          color: '#86efac',
+          backgroundColor: '#14532d',
+          padding: { x: 8, y: 5 },
+        })
+        .setInteractive({ useHandCursor: true });
+
+      const ref: DiplomacyCardRef = {
+        container: card,
+        cBg,
+        header,
+        status,
+        resLine,
+        pactBtn,
+        allyBtn,
+        tradeBtns: [],
+        tribeId: '',
+      };
+
+      pactBtn.on('pointerdown', () => {
+        if (!ref.tribeId) return;
+        SoundFX.unlock();
+        this.events.emit('ui-button-clicked');
+        this.events.emit('propose-non-aggression', ref.tribeId);
+      });
+      allyBtn.on('pointerdown', () => {
+        if (!ref.tribeId) return;
+        SoundFX.unlock();
+        this.events.emit('ui-button-clicked');
+        this.events.emit('propose-alliance', ref.tribeId);
+      });
+
+      card.add([cBg, header, status, resLine, pactBtn, allyBtn]);
+
+      for (const td of tradeDefs) {
+        const tBtn = this.add
+          .text(td.x, 76, td.label, {
+            fontSize: '10.5px',
+            fontStyle: 'bold',
+            color: '#fef08a',
+            backgroundColor: '#422b16',
+            padding: { x: 7, y: 5 },
+          })
+          .setInteractive({ useHandCursor: true });
+        tBtn.on('pointerdown', () => {
+          if (!ref.tribeId) return;
+          SoundFX.unlock();
+          this.events.emit('ui-button-clicked');
+          this.events.emit('trade-with-tribe', {
+            tribeId: ref.tribeId,
+            giveType: td.giveType,
+            giveAmount: 15,
+            receiveType: td.receiveType,
+            receiveAmount: td.receiveType === 'bone' || td.receiveType === 'hide' ? 10 : 12,
+          });
+        });
+        ref.tradeBtns.push(tBtn);
+        card.add(tBtn);
+      }
+
+      card.setVisible(false);
+      this.diplomacyCards.push(ref);
+      this.diplomacyBodyContainer.add(card);
+    }
+
+    this.diplomacyModalContainer.add([
+      scrim,
+      bg,
+      title,
+      closeBtn,
+      this.diplomacyEmptyText,
+      this.diplomacyBodyContainer,
+    ]);
     this.diplomacyModalContainer.setVisible(false);
   }
 
   private refreshDiplomacyModal(): void {
-    this.diplomacyBodyContainer.removeAll(true);
     const discovered = this.latestRivals.filter((r) => r.discovered && r.alive);
-
-    if (discovered.length === 0) {
-      const empty = this.add
-        .text(
-          0,
-          0,
-          'Ви ще не зустріли інших племен.\nРозвідуйте карту збирачами або воїнами — щойно ви зустрінете\nінше плем’я, тут відкриються переговори, ненапад на 4 сезони, союз і торгівля!',
-          {
-            fontSize: '14px',
-            color: '#e6ccb2',
-            align: 'center',
-          }
-        )
-        .setOrigin(0.5);
-      this.diplomacyBodyContainer.add(empty);
-      return;
-    }
+    this.diplomacyEmptyText.setVisible(discovered.length === 0);
 
     const cardW = 654;
     const cardH = 112;
-    const startY = -156;
 
-    discovered.forEach((tr, idx) => {
-      const cy = startY + idx * (cardH + 10);
-      const card = this.add.container(-cardW / 2, cy);
-
-      const cBg = this.add.graphics();
-      cBg.fillStyle(0x160f09, 0.94);
-      cBg.fillRoundedRect(0, 0, cardW, cardH, 12);
-      cBg.lineStyle(1.8, Phaser.Display.Color.HexStringToColor(tr.colorHex).color, 0.92);
-      cBg.strokeRoundedRect(0, 0, cardW, cardH, 12);
-
-      const header = this.add.text(
-        14,
-        10,
-        `🏴 Плем’я «${tr.nameUk}» • 👥 Населення: ${tr.population}/${tr.popCap} • ⚔️ Воїнів: ${tr.warriorsCount} • 🏠 Споруд: ${tr.buildingsCount}`,
-        {
-          fontSize: '13px',
-          fontStyle: 'bold',
-          color: '#fde68a',
-        }
-      );
-
-      const status = this.add.text(
-        14,
-        32,
-        `Ставлення до нас: ${tr.attitudeUk}   |   Міжплемінні події: ${tr.interTribeStatusUk}`,
-        {
-          fontSize: '11.5px',
-          color: '#bae6fd',
-        }
-      );
-
-      const resLine = this.add.text(
-        14,
-        52,
-        `Запаси племені: 🪵${tr.resources.wood}  🪨${tr.resources.stone}  🍖${tr.resources.food}  🦴${tr.resources.bone}  🧥${tr.resources.hide}`,
-        {
-          fontSize: '11px',
-          color: '#d6c2a8',
-        }
-      );
-
-      card.add([cBg, header, status, resLine]);
-
-      // Diplomacy buttons: Non-aggression (4 seasons) & Alliance
-      if (tr.treaty !== 'non_aggression' && tr.treaty !== 'alliance') {
-        const pactBtn = this.add
-          .text(14, 76, '🕊️ Пакт про ненапад (4 сезони)', {
-            fontSize: '11px',
-            fontStyle: 'bold',
-            color: '#fef08a',
-            backgroundColor: '#1e3a5f',
-            padding: { x: 8, y: 5 },
-          })
-          .setInteractive({ useHandCursor: true });
-        pactBtn.on('pointerdown', () => {
-          SoundFX.unlock();
-          this.events.emit('ui-button-clicked');
-          this.events.emit('propose-non-aggression', tr.id);
-        });
-        card.add(pactBtn);
+    this.diplomacyCards.forEach((card, idx) => {
+      const tr = discovered[idx];
+      if (!tr) {
+        card.tribeId = '';
+        card.container.setVisible(false);
+        return;
       }
+      card.tribeId = tr.id;
+      card.cBg.clear();
+      card.cBg.fillStyle(0x160f09, 0.94);
+      card.cBg.fillRoundedRect(0, 0, cardW, cardH, 12);
+      card.cBg.lineStyle(1.8, Phaser.Display.Color.HexStringToColor(tr.colorHex).color, 0.92);
+      card.cBg.strokeRoundedRect(0, 0, cardW, cardH, 12);
 
-      if (tr.treaty !== 'alliance') {
-        const allyBtn = this.add
-          .text(238, 76, '🤝 Укласти Союз (відкрити торгівлю)', {
-            fontSize: '11px',
-            fontStyle: 'bold',
-            color: '#86efac',
-            backgroundColor: '#14532d',
-            padding: { x: 8, y: 5 },
-          })
-          .setInteractive({ useHandCursor: true });
-        allyBtn.on('pointerdown', () => {
-          SoundFX.unlock();
-          this.events.emit('ui-button-clicked');
-          this.events.emit('propose-alliance', tr.id);
-        });
-        card.add(allyBtn);
-      } else {
-        // Trade buttons when allied!
-        const trades: Array<{
-          label: string;
-          giveType: 'wood' | 'stone' | 'food';
-          receiveType: 'wood' | 'stone' | 'food' | 'bone' | 'hide';
-          x: number;
-        }> = [
-          { label: '⚖️ 15🪵 → 12🍖', giveType: 'wood', receiveType: 'food', x: 14 },
-          { label: '⚖️ 15🪨 → 12🪵', giveType: 'stone', receiveType: 'wood', x: 148 },
-          { label: '⚖️ 15🍖 → 12🪨', giveType: 'food', receiveType: 'stone', x: 282 },
-          { label: '⚖️ 15🪵 → 10🦴', giveType: 'wood', receiveType: 'bone', x: 416 },
-          { label: '⚖️ 15🪨 → 10🧥', giveType: 'stone', receiveType: 'hide', x: 538 },
-        ];
-        trades.forEach((t) => {
-          const tBtn = this.add
-            .text(t.x, 76, t.label, {
-              fontSize: '10.5px',
-              fontStyle: 'bold',
-              color: '#fef08a',
-              backgroundColor: '#422b16',
-              padding: { x: 7, y: 5 },
-            })
-            .setInteractive({ useHandCursor: true });
-          tBtn.on('pointerdown', () => {
-            SoundFX.unlock();
-            this.events.emit('ui-button-clicked');
-            this.events.emit('trade-with-tribe', {
-              tribeId: tr.id,
-              giveType: t.giveType,
-              giveAmount: 15,
-              receiveType: t.receiveType,
-              receiveAmount: t.receiveType === 'bone' || t.receiveType === 'hide' ? 10 : 12,
-            });
-          });
-          card.add(tBtn);
-        });
+      card.header.setText(
+        `🏴 Плем’я «${tr.nameUk}» • 👥 Населення: ${tr.population}/${tr.popCap} • ⚔️ Воїнів: ${tr.warriorsCount} • 🏠 Споруд: ${tr.buildingsCount}`
+      );
+      card.status.setText(
+        `Ставлення до нас: ${tr.attitudeUk}   |   Міжплемінні події: ${tr.interTribeStatusUk}`
+      );
+      card.resLine.setText(
+        `Запаси племені: 🪵${tr.resources.wood}  🪨${tr.resources.stone}  🍖${tr.resources.food}  🦴${tr.resources.bone}  🧥${tr.resources.hide}`
+      );
+
+      card.pactBtn.setVisible(tr.treaty !== 'non_aggression' && tr.treaty !== 'alliance');
+      card.allyBtn.setVisible(tr.treaty !== 'alliance');
+      for (const tb of card.tradeBtns) {
+        tb.setVisible(tr.treaty === 'alliance');
       }
-
-      this.diplomacyBodyContainer.add(card);
+      card.container.setVisible(true);
     });
   }
 
@@ -2876,23 +3121,28 @@ export class UIScene extends Phaser.Scene {
     const actionH = 46 * actionScale;
     const actionMarginBottom = logicalW >= 1180 && !isCompactLandscape ? 22 : 8;
 
-    const ctrlMaxH = Math.max(112, logicalH - minimapBottom - actionH - actionMarginBottom - 16);
-    const ctrlScale = Math.min(1, Math.max(0.62, ctrlMaxH / 208), isCompactLandscape ? 0.82 : 1);
-    const ctrlW = 44 * ctrlScale;
-    this.cameraControlsContainer
-      .setScale(ctrlScale * dpr)
-      .setPosition(toCanvas(logicalW - ctrlW - 8), toCanvas(minimapBottom + 6));
-
     const dockScale = isPortrait
       ? Math.min(1, (logicalW - 16) / 362)
       : Math.min(1, (logicalW * 0.45) / 362, isCompactLandscape ? 0.82 : 1);
     this.quickDockContainer.setScale(dockScale * dpr);
     const dockH = 42 * dockScale;
 
+    const needsRightDockClearance = isPortrait || logicalW < 1180 || isCompactLandscape;
+    const rightDockReserve = needsRightDockClearance ? dockH + 12 : 0;
+    const ctrlMaxH = Math.max(
+      96,
+      logicalH - minimapBottom - actionH - actionMarginBottom - rightDockReserve - 16
+    );
+    const ctrlScale = Math.min(1, Math.max(0.48, ctrlMaxH / 208), isCompactLandscape ? 0.76 : 1);
+    const ctrlW = 44 * ctrlScale;
+    this.cameraControlsContainer
+      .setScale(ctrlScale * dpr)
+      .setPosition(toCanvas(logicalW - ctrlW - 8), toCanvas(minimapBottom + 6));
+
     const cardScale = isPortrait
       ? Math.min(0.84, (logicalW - 16) / this.cardWidth)
       : isCompactLandscape
-      ? Math.min(0.68, (logicalW * 0.34) / this.cardWidth, (logicalH * 0.34) / this.cardHeight)
+      ? Math.min(0.79, (logicalW * 0.39) / this.cardWidth, (logicalH * 0.41) / this.cardHeight)
       : Math.min(1, (logicalW * 0.42) / this.cardWidth, (logicalH * 0.38) / this.cardHeight);
     this.unitPanel.setScale(cardScale * dpr);
     this.groupPanel.setScale(cardScale * dpr);

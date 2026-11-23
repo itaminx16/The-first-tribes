@@ -301,6 +301,7 @@ export type BuildingType =
   | 'watchtower'
   | 'smokehouse'
   | 'palisade'
+  | 'bridge'
   | 'burial_mound';
 
 export type BuildingCategory = 'living' | 'economy' | 'military' | 'spiritual';
@@ -345,7 +346,7 @@ export const MAX_BIRTHS_PER_WOMAN_PER_SEASON = 2;
 
 export const TOOL_RESERVE_BUFFER = 5;
 export const GEAR_DEFENSE_RESERVE = 10;
-export const TOOL_CRAFT_COST = { wood: 2, stone: 1, bone: 2 } as const;
+export const TOOL_CRAFT_COST = { wood: 2, stone: 1 } as const;
 
 export const CARCASS_YIELD = {
   food: 15,
@@ -621,9 +622,9 @@ export const BUILDING_DEFS: Record<BuildingType, BuildingDef> = {
     shortUk: 'Комора',
     wood: 30,
     stone: 15,
-    profession: 'keeper',
-    maxWorkers: 1,
-    descUk: '+80 до ліміту та переносить усі склади від вогнища'
+    profession: null,
+    maxWorkers: 0,
+    descUk: '+80 до ліміту складу. Зберігає всі ресурси племені без працівників.'
   },
   workshop: {
     type: 'workshop',
@@ -634,7 +635,7 @@ export const BUILDING_DEFS: Record<BuildingType, BuildingDef> = {
     stone: 20,
     profession: 'crafter',
     maxWorkers: 1,
-    descUk: 'Виготовляє інструменти з дерева, каменю та кісток (запас +5)'
+    descUk: 'Виготовляє інструменти для кожного жителя (+5 у запас) з дерева й каменю.'
   },
   armory: {
     type: 'armory',
@@ -670,7 +671,7 @@ export const BUILDING_DEFS: Record<BuildingType, BuildingDef> = {
     bone: 5,
     profession: 'warrior',
     maxWorkers: 1,
-    descUk: 'Обстрілює хижаків і нападників стрілами, розширює огляд'
+    descUk: 'Лише для воїнів! Воїн безперервно стріляє з лука, вежа приймає удар першою.'
   },
   smokehouse: {
     type: 'smokehouse',
@@ -706,6 +707,17 @@ export const BUILDING_DEFS: Record<BuildingType, BuildingDef> = {
     profession: null,
     maxWorkers: 0,
     descUk: 'Деревʼяна оборонна стіна (можна зруйнувати)'
+  },
+  bridge: {
+    type: 'bridge',
+    category: 'economy',
+    nameUk: 'Міст',
+    shortUk: 'Міст',
+    wood: 20,
+    stone: 8,
+    profession: null,
+    maxWorkers: 0,
+    descUk: 'Деревʼяний міст через річку — жителі й воїни вільно переходять по ньому'
   },
   burial_mound: {
     type: 'burial_mound',
@@ -911,6 +923,11 @@ export interface BuildingSnapshot {
   canDemolish?: boolean;
   hp?: number;
   maxHp?: number;
+  toolsInStock?: number;
+  toolsEquipped?: number;
+  toolsTarget?: number;
+  garrisonedWarriorName?: string | null;
+  requiresWarrior?: boolean;
 }
 
 export interface VillagerSnapshot {
@@ -998,6 +1015,7 @@ export interface MinimapData {
   playerCamp: { x: number; y: number };
   lake: { x: number; y: number };
   riverPoints?: Array<{ x: number; y: number; radius: number; isFord: boolean }>;
+  bridges?: Array<{ x: number; y: number }>;
   playerUnits: Array<{ x: number; y: number; isWarrior: boolean; selected: boolean }>;
   predators: Array<{ x: number; y: number }>;
   rivals: Array<{
@@ -1011,6 +1029,7 @@ export interface MinimapData {
   }>;
   enemyUnits: Array<{ x: number; y: number; color: number; visible?: boolean }>;
   fogEnabled?: boolean;
+  fogGrid?: { cols: number; rows: number; cells: number[] };
 }
 
 export const STATE_LABELS_UK: Record<VillagerState, string> = {

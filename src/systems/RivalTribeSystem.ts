@@ -12,6 +12,7 @@ import {
   ResourceInventory,
   ResourceType,
   RivalTribeSnapshot,
+  Season,
   TreatyType,
   VillagerAppearanceId,
   WarriorClass,
@@ -20,6 +21,7 @@ import { SoundFX } from '../utils/SoundFX';
 import { EnemyUnit, EnemyUnitContext } from '../entities/EnemyUnit';
 import { StorageZone } from '../entities/StorageZone';
 import type { ResourceNode } from '../entities/ResourceNode';
+import type { River } from '../entities/River';
 
 export interface RivalBuildingVisual {
   type: BuildingType;
@@ -47,14 +49,16 @@ export interface RivalCampState {
   relationScore: number;
   interTribeStatusUk: string;
   hasBarracks: boolean;
+  barracksCount: number;
   breedingTimerMs: number;
   isBreedingNow: boolean;
   buildCheckTimerMs: number;
-  raidTimerMs: number;
   banner: Phaser.GameObjects.Image;
   label: Phaser.GameObjects.Text;
   buildings: RivalBuildingVisual[];
   fireGlow: Phaser.GameObjects.Ellipse;
+  fireBase: Phaser.GameObjects.Image;
+  flame: Phaser.GameObjects.Image;
   storages: Record<ResourceType, StorageZone>;
   storagePathDecals: Phaser.GameObjects.Image[];
   storagesHidden: boolean;
@@ -64,11 +68,13 @@ export interface RivalSystemContext {
   worldW: number;
   worldH: number;
   rivalCount: number;
+  campCorners: Array<{ x: number; y: number }>;
   getPlayerCampPos: () => { x: number; y: number };
   getPlayerPop: () => number;
   getPlayerTargets: () => CombatTarget[];
   getResourceNodes: () => ResourceNode[];
   getObstacles: () => ObstacleCircle[];
+  getRiver: () => River | null;
   findBlockingBarricade: EnemyUnitContext['findBlockingBarricade'];
   onAttackTarget: (attacker: EnemyUnit, target: CombatTarget) => void;
   onEnemyKilled: (unit: EnemyUnit, killer?: CombatTarget) => void;
@@ -89,27 +95,24 @@ const RIVAL_TEMPLATE_DEFS = [
     nameUk: 'Червоне Ікло',
     color: 0xef4444,
     colorHex: '#ef4444',
-    fx: 0.17,
-    fy: 0.18,
-    firstRaidMs: 165_000,
+    fx: 0.16,
+    fy: 0.17,
   },
   {
     id: 'rival-2',
     nameUk: 'Попелясті Скелі',
     color: 0xa855f7,
     colorHex: '#a855f7',
-    fx: 0.82,
-    fy: 0.19,
-    firstRaidMs: 195_000,
+    fx: 0.84,
+    fy: 0.17,
   },
   {
     id: 'rival-3',
     nameUk: 'Чорний Кіготь',
     color: 0xf97316,
     colorHex: '#f97316',
-    fx: 0.81,
-    fy: 0.81,
-    firstRaidMs: 225_000,
+    fx: 0.84,
+    fy: 0.83,
   },
 ] as const;
 
@@ -139,6 +142,9 @@ export class RivalTribeSystem {
   private unitCounter = 0;
   private discoveryCheckTimer = 600;
   private interTribeTimer = 38_000;
+  private seasonsPassed = 0;
+  private pendingRaids: Array<{ campId: string; delayMs: number }> = [];
+  private campSiegeTargets = new Map<string, CombatTarget>();
 
   // Matrix of relations between rival tribes: key = "id1:id2" -> 'peace' | 'alliance' | 'war'
   private interTribeRelations = new Map<string, 'peace' | 'alliance' | 'war'>();
@@ -150,9 +156,10 @@ export class RivalTribeSystem {
     const count = Phaser.Math.Clamp(ctx.rivalCount, 0, 3);
     const activeDefs = RIVAL_TEMPLATE_DEFS.slice(0, count);
 
-    for (const def of activeDefs) {
-      const cx = Math.round(ctx.worldW * def.fx);
-      const cy = Math.round(ctx.worldH * def.fy);
+    activeDefs.forEach((def, idx) => {
+      const corner = ctx.campCorners[idx];
+      const cx = corner ? Math.round(corner.x) : Math.round(ctx.worldW * def.fx);
+      const cy = corner ? Math.round(corner.y) : Math.round(ctx.worldH * def.fy);
 
       const fireGlow = scene.add
         .ellipse(cx, cy + 8, 96, 44, def.color, 0.24)
@@ -162,7 +169,7 @@ export class RivalTribeSystem {
         .setScale(0.95)
         .setDepth(cy);
       fireBase.setTint(0xffedd5);
-      scene.add.image(cx, cy - 24, 'flame-0').setScale(0.86).setDepth(cy + 1);
+      const flame = scene.add.image(cx, cy - 24, 'flame-0').setScale(0.86).setDepth(cy + 1);
 
       const banner = scene.add
         .image(cx - 58, cy - 18, 'rival-banner')
@@ -208,7 +215,7 @@ export class RivalTribeSystem {
         hide: new StorageZone(scene, spots.hide.x, spots.hide.y, 'hide', RESOURCE_LABELS_UK.hide),
       };
 
-      // Each rival tribe starts identically to the player: 1 Woman + 2 Men, 1 starting Hut (popCap = 4)
+      // Each rival tribe starts fairly like the player: 1 Woman + 2 Men, modest starting food/wood/stone, 1 Hut
       const camp: RivalCampState = {
         id: def.id,
         nameUk: def.nameUk,
@@ -219,9 +226,9 @@ export class RivalTribeSystem {
         population: 3,
         popCap: 4,
         resources: {
-          wood: 20,
-          stone: 15,
-          food: 25,
+          wood: 14,
+          stone: 10,
+          food: 16,
           bone: 0,
           hide: 0,
         },
@@ -234,14 +241,16 @@ export class RivalTribeSystem {
         relationScore: 50,
         interTribeStatusUk: 'Розвиває поселення',
         hasBarracks: false,
-        breedingTimerMs: 18_000,
+        barracksCount: 0,
+        breedingTimerMs: 30_000,
         isBreedingNow: false,
-        buildCheckTimerMs: 4500,
-        raidTimerMs: def.firstRaidMs,
+        buildCheckTimerMs: 5500,
         banner,
         label,
         buildings: [],
         fireGlow,
+        fireBase,
+        flame,
         storages,
         storagePathDecals,
         storagesHidden: false,
@@ -253,11 +262,11 @@ export class RivalTribeSystem {
       this.updateCampLabel(camp);
       this.camps.push(camp);
 
-      // Spawn the initial 1 female + 2 males as real gatherers!
+      // Spawn the initial 1 female + 2 males as real gatherers
       this.spawnTribeGatherer(camp, 'female');
       this.spawnTribeGatherer(camp, 'male');
       this.spawnTribeGatherer(camp, 'male');
-    }
+    });
   }
 
   private placeCampBuilding(
@@ -266,20 +275,20 @@ export class RivalTribeSystem {
     popBonus: number
   ): void {
     const offsets = [
-      { ox: -230, oy: -68 },
-      { ox: 230, oy: -64 },
-      { ox: -215, oy: 112 },
-      { ox: 215, oy: 112 },
-      { ox: 10, oy: -175 },
-      { ox: -310, oy: 25 },
-      { ox: 310, oy: 25 },
-      { ox: 0, oy: 195 },
-      { ox: -265, oy: -155 },
-      { ox: 265, oy: -155 },
+      { ox: -210, oy: -62 },
+      { ox: 210, oy: -60 },
+      { ox: -195, oy: 108 },
+      { ox: 195, oy: 108 },
+      { ox: 10, oy: -165 },
+      { ox: -260, oy: 25 },
+      { ox: 260, oy: 25 },
+      { ox: 0, oy: 185 },
+      { ox: -235, oy: -145 },
+      { ox: 235, oy: -145 },
     ];
     const off = offsets[camp.buildings.length % offsets.length];
-    const bx = camp.x + off.ox;
-    const by = camp.y + off.oy;
+    const bx = Phaser.Math.Clamp(camp.x + off.ox, 95, this.ctx.worldW - 95);
+    const by = Phaser.Math.Clamp(camp.y + off.oy, 105, this.ctx.worldH - 95);
     const tex =
       type === 'hut'
         ? 'hut-stage-3'
@@ -294,6 +303,7 @@ export class RivalTribeSystem {
     camp.popCap += popBonus;
     if (type === 'barracks') {
       camp.hasBarracks = true;
+      camp.barracksCount += 1;
     }
     if (type === 'granary' && !camp.storagesHidden) {
       camp.storagesHidden = true;
@@ -351,6 +361,7 @@ export class RivalTribeSystem {
         worldW: this.ctx.worldW,
         worldH: this.ctx.worldH,
         getObstacles: () => this.ctx.getObstacles(),
+        getRiver: () => this.ctx.getRiver(),
         findHostileTarget: (seeker, maxRange) =>
           this.findHostileForEnemy(seeker, maxRange),
         findBlockingBarricade: this.ctx.findBlockingBarricade,
@@ -358,7 +369,7 @@ export class RivalTribeSystem {
           this.findNearestResourceForCamp(camp, seeker),
         onDeliverResource: (_u, rType, amount) => {
           camp.resources[rType] += amount;
-          if (rType === 'food' && Math.random() < 0.35) {
+          if (rType === 'food' && Math.random() < 0.45) {
             camp.resources.bone += 1;
             camp.resources.hide += 1;
           }
@@ -437,7 +448,12 @@ export class RivalTribeSystem {
     return out;
   }
 
-  public onSeasonChanged(): void {
+  public setSeasonsPassed(n: number): void {
+    this.seasonsPassed = Math.max(0, n);
+  }
+
+  public onSeasonChanged(season: Season, seasonsPassed: number): void {
+    this.seasonsPassed = seasonsPassed;
     for (const camp of this.camps) {
       if (!camp.alive) continue;
       if (camp.treaty === 'non_aggression') {
@@ -447,6 +463,79 @@ export class RivalTribeSystem {
         }
       }
       this.updateCampLabel(camp);
+    }
+
+    // Season 1 (first spring step, seasonsPassed === 0) is strictly peaceful development.
+    // After the first season step, twice per 4-season year (Summer & Winter), a tribe launches a raid on a random alive tribe!
+    if (this.seasonsPassed >= 1 && (season === 'SUMMER' || season === 'WINTER')) {
+      const readyCamps = this.camps.filter((c) => {
+        if (!c.alive || !c.hasBarracks) return false;
+        const guards = this.units.filter(
+          (u) => u.isAlive() && u.tribeId === c.id && u.mode === 'GUARD'
+        );
+        return guards.length >= 2;
+      });
+      if (readyCamps.length > 0) {
+        const chosenRaider = Phaser.Math.RND.pick(readyCamps);
+        this.pendingRaids.push({
+          campId: chosenRaider.id,
+          delayMs: Phaser.Math.Between(5_000, 14_000),
+        });
+      }
+    }
+  }
+
+  public getCampCombatTarget(camp: RivalCampState): CombatTarget {
+    let target = this.campSiegeTargets.get(camp.id);
+    if (!target) {
+      target = {
+        id: `camp-${camp.id}`,
+        x: camp.x,
+        y: camp.y,
+        faction: 'rival',
+        tribeId: camp.id,
+        isAlive: () => camp.alive,
+        takeDamage: (dmg) => this.damageCamp(camp, dmg),
+      };
+      this.campSiegeTargets.set(camp.id, target);
+    }
+    return target;
+  }
+
+  public syncFogVisibility(
+    isVisible: (x: number, y: number) => boolean,
+    isExplored: (x: number, y: number) => boolean
+  ): void {
+    for (const camp of this.camps) {
+      const explored = isExplored(camp.x, camp.y);
+      const visible = isVisible(camp.x, camp.y);
+
+      camp.fireGlow.setVisible(explored);
+      camp.fireBase.setVisible(explored);
+      camp.flame.setVisible(explored && camp.alive);
+      camp.banner.setVisible(explored);
+      camp.label.setVisible(visible);
+
+      for (const b of camp.buildings) {
+        b.sprite.setVisible(explored);
+      }
+      if (!camp.storagesHidden) {
+        for (const st of Object.values(camp.storages)) {
+          st.setVisible(explored);
+        }
+        for (const d of camp.storagePathDecals) {
+          d.setVisible(explored);
+        }
+      }
+    }
+
+    for (const u of this.units) {
+      if (!u.isAlive()) continue;
+      if (u.mode === 'CAPTIVE') {
+        u.setVisible(true);
+      } else {
+        u.setVisible(isVisible(u.x, u.y));
+      }
     }
   }
 
@@ -459,24 +548,31 @@ export class RivalTribeSystem {
     return 0;
   }
 
+  private damageCamp(camp: RivalCampState, dmg: number): boolean {
+    if (!camp.alive) return false;
+    camp.hp = Math.max(0, camp.hp - dmg);
+    camp.fireGlow.setAlpha(0.45);
+    if (camp.treaty !== 'war') {
+      camp.treaty = 'war';
+      camp.relationScore = Math.max(0, camp.relationScore - 35);
+    }
+    this.updateCampLabel(camp);
+    if (camp.hp <= 0) {
+      camp.alive = false;
+      camp.flame.setVisible(false);
+      camp.label.setText(`🏳️ ${camp.nameUk} розбито`);
+      camp.banner.setAlpha(0.35);
+      this.ctx.onRivalDefeated(camp.nameUk, camp.x, camp.y);
+      return true;
+    }
+    return false;
+  }
+
   public damageCampNear(x: number, y: number, dmg: number): boolean {
     for (const camp of this.camps) {
       if (!camp.alive) continue;
       if (Phaser.Math.Distance.Between(x, y, camp.x, camp.y) <= 130) {
-        camp.hp = Math.max(0, camp.hp - dmg);
-        camp.fireGlow.setAlpha(0.45);
-        if (camp.treaty !== 'war') {
-          camp.treaty = 'war';
-          camp.relationScore = Math.max(0, camp.relationScore - 35);
-        }
-        this.updateCampLabel(camp);
-        if (camp.hp <= 0) {
-          camp.alive = false;
-          camp.label.setText(`🏳️ ${camp.nameUk} розбито`);
-          camp.banner.setAlpha(0.35);
-          this.ctx.onRivalDefeated(camp.nameUk, camp.x, camp.y);
-          return true;
-        }
+        return this.damageCamp(camp, dmg);
       }
     }
     return false;
@@ -538,24 +634,24 @@ export class RivalTribeSystem {
         this.updateCampLabel(camp);
       }
 
-      // B. Romance & Breeding AI (requires 1 male + 1 female, food >= 14, pop < popCap)
+      // B. Natural Population Growth & Child Raising (requires 1 male + 1 female, food >= 14, pop < popCap)
       camp.breedingTimerMs -= delta;
       if (camp.breedingTimerMs <= 0 && !camp.isBreedingNow) {
-        camp.breedingTimerMs = 20_000;
+        camp.breedingTimerMs = 34_000;
         const hasFemale = campUnits.some((u) => u.gender === 'female');
         const hasMale = campUnits.some((u) => u.gender === 'male');
         if (
           hasFemale &&
           hasMale &&
           camp.population < camp.popCap &&
-          camp.resources.food >= 12
+          camp.resources.food >= 14
         ) {
           camp.resources.food -= 10;
           this.syncCampStorages(camp);
           camp.isBreedingNow = true;
 
-          // Spawn heart above rival hut
-          if (primaryHut) {
+          // Spawn heart above rival hut (if visible)
+          if (primaryHut && primaryHut.visible) {
             const heart = this.scene.add
               .text(primaryHut.x, primaryHut.y - 54, '❤️', { fontSize: '16px' })
               .setOrigin(0.5)
@@ -569,7 +665,7 @@ export class RivalTribeSystem {
             });
           }
 
-          this.scene.time.delayedCall(7500, () => {
+          this.scene.time.delayedCall(9000, () => {
             if (!camp.alive) return;
             camp.isBreedingNow = false;
             const newGender: Gender = Math.random() < 0.5 ? 'female' : 'male';
@@ -581,15 +677,23 @@ export class RivalTribeSystem {
           });
         }
       }
+    }
 
-      // C. Raiding AI (only if population >= 25 or warring against another tribe)
-      if (camp.hasBarracks && camp.population >= 10) {
-        camp.raidTimerMs -= delta;
-        if (camp.raidTimerMs <= 0) {
-          camp.raidTimerMs = Phaser.Math.Between(120_000, 165_000);
-          this.launchRaidFromCamp(camp);
+    // Process seasonal scheduled raids (twice per year after the peaceful first season)
+    if (this.pendingRaids.length > 0 && this.seasonsPassed >= 1) {
+      const stillPending: Array<{ campId: string; delayMs: number }> = [];
+      for (const item of this.pendingRaids) {
+        item.delayMs -= delta;
+        if (item.delayMs <= 0) {
+          const raiderCamp = this.camps.find((c) => c.id === item.campId && c.alive);
+          if (raiderCamp) {
+            this.launchRaidFromCamp(raiderCamp);
+          }
+        } else {
+          stillPending.push(item);
         }
       }
+      this.pendingRaids = stillPending;
     }
 
     for (const u of [...this.units]) {
@@ -601,28 +705,33 @@ export class RivalTribeSystem {
   }
 
   private tryArmWarriors(camp: RivalCampState, campUnits: EnemyUnit[]): void {
+    // Warriors only form organically from surplus grown villagers once a Barracks is built & equipped with crafted resources!
     if (!camp.hasBarracks) return;
     const gatherers = campUnits.filter((u) => u.mode === 'GATHERER');
     const guards = campUnits.filter((u) => u.mode === 'GUARD' || u.mode === 'RAID');
-    // Always keep at least 3 gatherers for economy & breeding
+    // Always keep at least 3 gatherers for food, wood, stone & family growth
     if (gatherers.length <= 3) return;
 
-    const desiredWarriors = Math.max(2, Math.floor((camp.population - 3) * 0.55));
-    if (guards.length >= desiredWarriors) return;
+    const naturalMaxWarriors = Math.min(
+      Math.max(2, camp.barracksCount * 5),
+      Math.floor((camp.population - 3) * 0.55)
+    );
+    if (guards.length >= naturalMaxWarriors) return;
 
-    if (camp.resources.wood >= 10 && camp.resources.stone >= 6) {
-      camp.resources.wood -= 10;
-      camp.resources.stone -= 6;
+    if (camp.resources.wood >= 8 && camp.resources.stone >= 4 && camp.resources.bone >= 2) {
+      camp.resources.wood -= 8;
+      camp.resources.stone -= 4;
+      camp.resources.bone -= 2;
       const recruit = gatherers[gatherers.length - 1];
       const classes: WarriorClass[] = ['spearman', 'archer', 'clubman'];
       const wClass = classes[guards.length % classes.length];
       let armor: ArmorType = 'none';
-      if (camp.resources.bone >= 6 && camp.resources.hide >= 4) {
-        camp.resources.bone -= 6;
-        camp.resources.hide -= 4;
+      if (camp.resources.bone >= 4 && camp.resources.hide >= 3) {
+        camp.resources.bone -= 4;
+        camp.resources.hide -= 3;
         armor = 'bone_armor';
-      } else if (camp.resources.hide >= 4) {
-        camp.resources.hide -= 4;
+      } else if (camp.resources.hide >= 3) {
+        camp.resources.hide -= 3;
         armor = 'hide_armor';
       }
       this.syncCampStorages(camp);
@@ -671,18 +780,24 @@ export class RivalTribeSystem {
     const key = this.getPairKey(a.id, b.id);
 
     const roll = Phaser.Math.Between(1, 100);
-    if (roll <= 35) {
-      this.interTribeRelations.set(key, 'alliance');
-      a.interTribeStatusUk = `Союз і торгівля з «${b.nameUk}»`;
-      b.interTribeStatusUk = `Союз і торгівля з «${a.nameUk}»`;
-      a.resources.wood += 12;
-      b.resources.food += 12;
-      if (a.discovered || b.discovered) {
-        this.ctx.onInterTribeEvent(
-          `🤝 Племена «${a.nameUk}» та «${b.nameUk}» уклали торговий союз!`
-        );
+    if (roll <= 40 || this.seasonsPassed === 0) {
+      if (roll <= 50) {
+        this.interTribeRelations.set(key, 'alliance');
+        a.interTribeStatusUk = `Союз і торгівля з «${b.nameUk}»`;
+        b.interTribeStatusUk = `Союз і торгівля з «${a.nameUk}»`;
+        a.resources.wood += 12;
+        b.resources.food += 12;
+        if (a.discovered || b.discovered) {
+          this.ctx.onInterTribeEvent(
+            `🤝 Племена «${a.nameUk}» та «${b.nameUk}» уклали торговий союз!`
+          );
+        }
+      } else {
+        this.interTribeRelations.set(key, 'peace');
+        a.interTribeStatusUk = `Пакт про ненапад із «${b.nameUk}»`;
+        b.interTribeStatusUk = `Пакт про ненапад із «${a.nameUk}»`;
       }
-    } else if (roll <= 70) {
+    } else if (roll <= 72) {
       this.interTribeRelations.set(key, 'peace');
       a.interTribeStatusUk = `Пакт про ненапад із «${b.nameUk}»`;
       b.interTribeStatusUk = `Пакт про ненапад із «${a.nameUk}»`;
@@ -699,40 +814,40 @@ export class RivalTribeSystem {
   }
 
   private launchRaidFromCamp(camp: RivalCampState): void {
+    if (this.seasonsPassed === 0) return;
     const availableGuards = this.units.filter(
       (u) => u.isAlive() && u.tribeId === camp.id && u.mode === 'GUARD'
     );
     if (availableGuards.length < 2) return;
 
-    const candidates: Array<{ x: number; y: number; tribeId: string }> = [];
+    const candidates: Array<{ x: number; y: number; tribeId: string; nameUk: string }> = [];
     for (const other of this.camps) {
       if (other !== camp && other.alive) {
         const rel = this.interTribeRelations.get(this.getPairKey(camp.id, other.id));
         if (rel !== 'alliance') {
-          candidates.push({ x: other.x, y: other.y, tribeId: other.id });
+          candidates.push({ x: other.x, y: other.y, tribeId: other.id, nameUk: other.nameUk });
         }
       }
     }
 
-    // Only raid the player if no treaty (non_aggression or alliance) and population threshold met
+    // Can raid the player if no non-aggression pact or alliance is active
     const canRaidPlayer =
       camp.treaty !== 'non_aggression' &&
-      camp.treaty !== 'alliance' &&
-      camp.population >= 25;
+      camp.treaty !== 'alliance';
 
     if (canRaidPlayer) {
       const pCamp = this.ctx.getPlayerCampPos();
-      candidates.push({ x: pCamp.x, y: pCamp.y, tribeId: 'player' });
+      candidates.push({ x: pCamp.x, y: pCamp.y, tribeId: 'player', nameUk: 'Ваше племʼя' });
     }
 
     if (candidates.length === 0) return;
 
     const chosen = Phaser.Math.RND.pick(candidates);
-    const desiredSquad =
-      chosen.tribeId === 'player'
-        ? this.getSquadSizeForPopulation(camp.population)
-        : Math.min(availableGuards.length - 1, 4);
-    const raiders = availableGuards.slice(0, Math.max(1, desiredSquad));
+    const desiredSquad = Math.max(
+      2,
+      Math.min(availableGuards.length - 1, Math.floor(availableGuards.length * 0.7))
+    );
+    const raiders = availableGuards.slice(0, desiredSquad);
 
     for (const r of raiders) {
       r.setRaidOrder({ x: chosen.x, y: chosen.y, tribeId: chosen.tribeId });
@@ -740,7 +855,15 @@ export class RivalTribeSystem {
 
     if (chosen.tribeId === 'player' && raiders.length > 0) {
       SoundFX.playAlarmHorn();
+      camp.interTribeStatusUk = '⚔️ Наліт на ваше поселення!';
       this.ctx.onRaidPlayerStarted(camp.nameUk, raiders.length, camp.x, camp.y);
+    } else if (raiders.length > 0) {
+      camp.interTribeStatusUk = `⚔️ Наліт на «${chosen.nameUk}»`;
+      if (camp.discovered) {
+        this.ctx.onInterTribeEvent(
+          `⚔️ Племʼя «${camp.nameUk}» вирушило в наліт на «${chosen.nameUk}»!`
+        );
+      }
     }
   }
 
@@ -748,6 +871,10 @@ export class RivalTribeSystem {
     seeker: EnemyUnit,
     maxRange: number
   ): CombatTarget | null {
+    // No raids or cross-tribe combat during the very first season (peaceful development phase)
+    if (this.seasonsPassed === 0) {
+      return null;
+    }
     const seekerCamp = this.camps.find((c) => c.id === seeker.tribeId);
     let best: CombatTarget | null = null;
     let bestDist = maxRange;
@@ -781,6 +908,19 @@ export class RivalTribeSystem {
       if (d < bestDist) {
         bestDist = d;
         best = other;
+      }
+    }
+
+    // Raiders targeting a rival camp whose defenders fell can destroy that camp's heart directly
+    if (!best && seeker.mode === 'RAID') {
+      for (const camp of this.camps) {
+        if (!camp.alive || camp.id === seeker.tribeId) continue;
+        const rel = this.interTribeRelations.get(this.getPairKey(seeker.tribeId, camp.id));
+        if (rel === 'alliance') continue;
+        const d = Phaser.Math.Distance.Between(seeker.x, seeker.y, camp.x, camp.y);
+        if (d <= maxRange) {
+          return this.getCampCombatTarget(camp);
+        }
       }
     }
 

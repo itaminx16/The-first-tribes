@@ -45,8 +45,12 @@ export class FogOfWarSystem {
       .image(0, 0, this.textureKey)
       .setOrigin(0, 0)
       .setDisplaySize(this.worldW, this.worldH)
-      .setDepth(4200)
+      .setDepth(4300)
       .setVisible(this.enabled);
+
+    if (this.enabled) {
+      this.renderCanvas();
+    }
   }
 
   public setEnabled(enabled: boolean): void {
@@ -112,17 +116,17 @@ export class FogOfWarSystem {
       const state = this.grid[i];
       const p = i * 4;
       if (state === 0) {
-        // Unexplored dark forest mist
-        data[p] = 11;
-        data[p + 1] = 16;
-        data[p + 2] = 13;
-        data[p + 3] = 220;
+        // 100% opaque unexplored dark forest mist
+        data[p] = 8;
+        data[p + 1] = 11;
+        data[p + 2] = 9;
+        data[p + 3] = 255;
       } else if (state === 1) {
-        // Explored shroud
-        data[p] = 14;
-        data[p + 1] = 20;
-        data[p + 2] = 16;
-        data[p + 3] = 110;
+        // Explored dark shroud
+        data[p] = 10;
+        data[p + 1] = 14;
+        data[p + 2] = 11;
+        data[p + 3] = 185;
       } else {
         // Fully visible
         data[p] = 0;
@@ -148,6 +152,27 @@ export class FogOfWarSystem {
     const c = Phaser.Math.Clamp(Math.floor(wx / this.cellSize), 0, this.cols - 1);
     const r = Phaser.Math.Clamp(Math.floor(wy / this.cellSize), 0, this.rows - 1);
     return this.grid[r * this.cols + c] >= 1;
+  }
+
+  public forceRender(): void {
+    if (this.enabled) {
+      this.renderCanvas();
+    }
+  }
+
+  public getMinimapFogGrid(): { cols: number; rows: number; cells: number[] } {
+    const step = 2;
+    const outCols = Math.ceil(this.cols / step);
+    const outRows = Math.ceil(this.rows / step);
+    const cells: number[] = [];
+    for (let r = 0; r < outRows; r++) {
+      const sr = Math.min(this.rows - 1, r * step);
+      for (let c = 0; c < outCols; c++) {
+        const sc = Math.min(this.cols - 1, c * step);
+        cells.push(this.grid[sr * this.cols + sc]);
+      }
+    }
+    return { cols: outCols, rows: outRows, cells };
   }
 
   public destroy(): void {

@@ -1308,6 +1308,135 @@ function createExpandedBuildings(scene: Phaser.Scene): void {
     ctx.stroke();
   });
 
+  // --- BRIDGE (Міст через річку) ---
+  // Drawn spanning horizontally along X (180x120) so rotation = crossAngle aligns cleanly across any river bank!
+  makeCanvas(scene, 'building-bridge-0', 180, 120, (ctx) => {
+    // Bank pilings & taut guide ropes
+    ctx.fillStyle = '#6f4222';
+    ctx.strokeStyle = OUTLINE;
+    ctx.lineWidth = 2;
+    for (const px of [24, 148]) {
+      for (const py of [32, 74]) {
+        drawRoundedRect(ctx, px, py, 9, 18, 3);
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+    ctx.strokeStyle = '#d9b07a';
+    ctx.lineWidth = 2.4;
+    ctx.beginPath();
+    ctx.moveTo(28, 36);
+    ctx.lineTo(152, 36);
+    ctx.moveTo(28, 78);
+    ctx.lineTo(152, 78);
+    ctx.stroke();
+  });
+
+  makeCanvas(scene, 'building-bridge-1', 180, 120, (ctx) => {
+    // Main stringer logs & partial planks
+    ctx.fillStyle = '#6f4222';
+    ctx.strokeStyle = OUTLINE;
+    ctx.lineWidth = 2;
+    drawRoundedRect(ctx, 16, 40, 148, 8, 3);
+    ctx.fill();
+    ctx.stroke();
+    drawRoundedRect(ctx, 16, 72, 148, 8, 3);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#9c6236';
+    for (let x = 24; x <= 96; x += 14) {
+      drawRoundedRect(ctx, x, 36, 10, 48, 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+  });
+
+  for (const winter of [false, true]) {
+    makeCanvas(
+      scene,
+      winter ? 'building-bridge-2-winter' : 'building-bridge-2',
+      180,
+      120,
+      (ctx) => {
+        // Subtle water shadow underneath deck
+        ctx.fillStyle = 'rgba(10, 26, 42, 0.34)';
+        drawRoundedRect(ctx, 14, 40, 152, 54, 8);
+        ctx.fill();
+
+        // Stone/earth riverbank abutments at left & right ends
+        ctx.fillStyle = winter ? '#cbd5e1' : '#948673';
+        ctx.strokeStyle = OUTLINE;
+        ctx.lineWidth = 2;
+        drawRoundedRect(ctx, 8, 32, 22, 56, 6);
+        ctx.fill();
+        ctx.stroke();
+        drawRoundedRect(ctx, 150, 32, 22, 56, 6);
+        ctx.fill();
+        ctx.stroke();
+
+        // Twin longitudinal stringer beams
+        ctx.fillStyle = '#583116';
+        drawRoundedRect(ctx, 18, 36, 144, 48, 5);
+        ctx.fill();
+        ctx.stroke();
+
+        // Individual lashed wooden planks
+        for (let i = 0; i < 11; i++) {
+          const px = 22 + i * 12.5;
+          ctx.fillStyle = i % 2 === 0 ? '#a97142' : '#925b30';
+          drawRoundedRect(ctx, px, 35, 11, 50, 2.5);
+          ctx.fill();
+          ctx.stroke();
+          if (winter) {
+            ctx.fillStyle = 'rgba(241, 248, 255, 0.72)';
+            drawRoundedRect(ctx, px + 1, 37, 9, 10, 2);
+            ctx.fill();
+          }
+        }
+
+        // Top & bottom log handrails + corner posts + rope lashings
+        for (const railY of [31, 83]) {
+          ctx.fillStyle = winter ? '#e2effa' : '#78350f';
+          drawRoundedRect(ctx, 18, railY, 144, 6, 3);
+          ctx.fill();
+          ctx.stroke();
+        }
+        for (const postX of [20, 62, 110, 150]) {
+          for (const postY of [26, 78]) {
+            ctx.fillStyle = '#5c3419';
+            drawRoundedRect(ctx, postX, postY, 8, 12, 3);
+            ctx.fill();
+            ctx.stroke();
+          }
+        }
+      }
+    );
+  }
+
+  makeCanvas(scene, 'icon-bridge', 44, 44, (ctx) => {
+    ctx.fillStyle = '#0ea5e9';
+    drawRoundedRect(ctx, 4, 22, 36, 16, 4);
+    ctx.fill();
+    ctx.fillStyle = '#a97142';
+    ctx.strokeStyle = OUTLINE;
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.moveTo(4, 24);
+    ctx.quadraticCurveTo(22, 8, 40, 24);
+    ctx.lineTo(40, 31);
+    ctx.quadraticCurveTo(22, 15, 4, 31);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.strokeStyle = '#78350f';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(6, 20);
+    ctx.quadraticCurveTo(22, 5, 38, 20);
+    ctx.stroke();
+  });
+
   // --- INFINITE ROCK CLIFF QUARRY (Вічна скеля) & SAPLINGS & BIOME TILES ---
   for (const winter of [false, true]) {
     makeCanvas(scene, winter ? 'rock-quarry-winter' : 'rock-quarry', 156, 124, (ctx) => {

@@ -1,7 +1,14 @@
 import Phaser from 'phaser';
 import { CombatTarget, ObstacleCircle } from '../types/game';
+import {
+  createNavAgentState,
+  NavigationAgentState,
+  resetNavAgentState,
+  stepSmartMove,
+} from '../systems/NavigationHelper';
 import { CURSORS } from '../utils/Cursors';
 import { SoundFX } from '../utils/SoundFX';
+import type { River } from './River';
 
 export type PredatorSpecies = 'wolf' | 'sabertooth' | 'bear';
 
@@ -9,6 +16,7 @@ export interface PredatorContext {
   worldW: number;
   worldH: number;
   getObstacles: () => ObstacleCircle[];
+  getRiver: () => River | null;
   getPotentialPrey: () => CombatTarget[];
   onAttackTarget: (predator: Predator, target: CombatTarget) => void;
   onKilled: (predator: Predator) => void;
@@ -44,6 +52,7 @@ export class Predator extends Phaser.GameObjects.Container implements CombatTarg
   private walkPhase = Phaser.Math.FloatBetween(0, Math.PI * 2);
   private alive = true;
   private roared = false;
+  private navState: NavigationAgentState;
 
   constructor(
     scene: Phaser.Scene,
@@ -59,6 +68,7 @@ export class Predator extends Phaser.GameObjects.Container implements CombatTarg
     this.ctx = ctx;
     this.homeX = x;
     this.homeY = y;
+    this.navState = createNavAgentState(x, y, id.charCodeAt(id.length - 1) || 0);
 
     if (species === 'wolf') {
       this.nameUk = 'Лютий вовк';
@@ -184,6 +194,7 @@ export class Predator extends Phaser.GameObjects.Container implements CombatTarg
     }
 
     if (this.chaseTarget) {
+      const targetPad = 'buildingType' in this.chaseTarget ? 42 : 0;
       const dist = Phaser.Math.Distance.Between(
         this.x,
         this.y,
@@ -193,7 +204,8 @@ export class Predator extends Phaser.GameObjects.Container implements CombatTarg
       if (dist > 600) {
         this.chaseTarget = null;
         this.roared = false;
-      } else if (dist <= 40) {
+      } else if (dist <= 40 + targetPad) {
+        resetNavAgentState(this.navState, this.x, this.y);
         this.resetLegs();
         const dx = this.chaseTarget.x - this.x;
         if (Math.abs(dx) > 0.5) this.rig.scaleX = dx >= 0 ? 1 : -1;
@@ -247,30 +259,26 @@ export class Predator extends Phaser.GameObjects.Container implements CombatTarg
   }
 
   private stepToward(tx: number, ty: number, dt: number, speed: number): void {
-    const dx = tx - this.x;
-    const dy = ty - this.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist < 0.01) return;
+    const res = stepSmartMove(
+      this.x,
+      this.y,
+      tx,
+      ty,
+      dt,
+      speed,
+      18,
+      10,
+      this.ctx.getObstacles(),
+      this.ctx.getRiver(),
+      this.ctx.worldW,
+      this.ctx.worldH,
+      this.navState
+    );
 
-    const step = Math.min(dist, speed * dt);
-    let nx = this.x + (dx / dist) * step;
-    let ny = this.y + (dy / dist) * step;
-
-    for (const obs of this.ctx.getObstacles()) {
-      const ox = nx - obs.x;
-      const oy = ny - obs.y;
-      const od = Math.hypot(ox, oy);
-      const minSep = obs.radius + 18;
-      if (od < minSep && od > 0.01) {
-        nx = obs.x + (ox / od) * minSep;
-        ny = obs.y + (oy / od) * minSep;
-      }
-    }
-
-    this.x = Phaser.Math.Clamp(nx, 85, this.ctx.worldW - 85);
-    this.y = Phaser.Math.Clamp(ny, 100, this.ctx.worldH - 85);
-    if (Math.abs(dx) > 0.4) {
-      this.rig.scaleX = dx >= 0 ? 1 : -1;
+    this.x = Phaser.Math.Clamp(res.x, 85, this.ctx.worldW - 85);
+    this.y = Phaser.Math.Clamp(res.y, 100, this.ctx.worldH - 85);
+    if (Math.abs(res.dx) > 0.25) {
+      this.rig.scaleX = res.dx >= 0 ? 1 : -1;
     }
 
     this.walkPhase += dt * (this.chaseTarget ? 16 : 9);

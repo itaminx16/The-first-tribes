@@ -6,6 +6,15 @@ interface RiverSegment {
   y: number;
   radius: number;
   isFord: boolean;
+  tangentAngle: number;
+}
+
+export interface RiverBridgeInfo {
+  id: string;
+  x: number;
+  y: number;
+  radius: number;
+  angle: number;
 }
 
 export class River {
@@ -18,7 +27,9 @@ export class River {
   private graphics: Phaser.GameObjects.Graphics;
   private rippleTimer = 0;
   private segments: RiverSegment[] = [];
-  private fordLabels: Phaser.GameObjects.Text[] = [];
+  private fordCenters: Array<{ x: number; y: number; radius: number }> = [];
+  private fordLabels: Array<{ label: Phaser.GameObjects.Text; x: number; y: number }> = [];
+  private bridges: RiverBridgeInfo[] = [];
   private obstacles: ObstacleCircle[] = [];
 
   constructor(
@@ -43,8 +54,9 @@ export class River {
 
   private buildSegments(): void {
     this.segments = [];
+    this.fordCenters = [];
     this.obstacles = [];
-    for (const lbl of this.fordLabels) lbl.destroy();
+    for (const item of this.fordLabels) item.label.destroy();
     this.fordLabels = [];
 
     const addRiverPath = (
@@ -58,29 +70,24 @@ export class River {
       for (let i = 0; i <= steps; i++) {
         const t = i / steps;
         const pt = curve.getPoint(t);
+        const tangent = curve.getTangent(t);
+        const tangentAngle = Math.atan2(tangent.y, tangent.x);
 
         let isFord = false;
         for (const f of fordFractions) {
-          if (Math.abs(t - f) < 0.042) {
+          if (Math.abs(t - f) < 0.045) {
             isFord = true;
             break;
           }
         }
 
         const r = baseRadius + Math.sin(i * 0.45) * 8;
-        this.segments.push({ x: pt.x, y: pt.y, radius: r, isFord });
-
-        if (!isFord && i % 2 === 0) {
-          this.obstacles.push({
-            x: pt.x,
-            y: pt.y,
-            radius: r * 0.76,
-          });
-        }
+        this.segments.push({ x: pt.x, y: pt.y, radius: r, isFord, tangentAngle });
       }
 
       for (const f of fordFractions) {
         const pt = curve.getPoint(f);
+        this.fordCenters.push({ x: pt.x, y: pt.y, radius: baseRadius + 16 });
         const lbl = this.scene.add
           .text(pt.x, pt.y - 8, '🪨 Брід', {
             fontFamily: 'Segoe UI, sans-serif',
@@ -93,7 +100,7 @@ export class River {
           .setOrigin(0.5)
           .setDepth(24)
           .setAlpha(0.85);
-        this.fordLabels.push(lbl);
+        this.fordLabels.push({ label: lbl, x: pt.x, y: pt.y });
       }
     };
 
@@ -101,15 +108,15 @@ export class River {
     const cy = this.worldH / 2;
 
     if (this.layout === 'single') {
-      // Winding river across the world passing safely around the central player village
+      // Winding river across the world passing through central plains while leaving all 4 corners spacious
       addRiverPath(
         [
           { x: 180, y: cy - 680 },
           { x: cx - 720, y: cy - 320 },
-          { x: cx - 560, y: cy + 340 },
-          { x: cx + 220, y: cy + 680 },
-          { x: cx + 920, y: cy + 520 },
-          { x: this.worldW - 140, y: cy + 880 },
+          { x: cx - 420, y: cy + 280 },
+          { x: cx + 220, y: cy + 560 },
+          { x: cx + 860, y: cy + 320 },
+          { x: this.worldW - 140, y: cy - 220 },
         ],
         62,
         [0.24, 0.52, 0.78]
@@ -117,9 +124,9 @@ export class River {
     } else if (this.layout === 'twin') {
       addRiverPath(
         [
-          { x: 140, y: cy - 520 },
-          { x: cx - 640, y: cy - 420 },
-          { x: cx - 540, y: cy + 280 },
+          { x: 140, y: cy - 420 },
+          { x: cx - 540, y: cy - 340 },
+          { x: cx - 440, y: cy + 240 },
           { x: cx - 220, y: this.worldH - 140 },
         ],
         58,
@@ -127,38 +134,161 @@ export class River {
       );
       addRiverPath(
         [
-          { x: cx + 340, y: 140 },
-          { x: cx + 560, y: cy - 220 },
-          { x: cx + 640, y: cy + 440 },
-          { x: this.worldW - 140, y: cy + 720 },
+          { x: cx + 260, y: 140 },
+          { x: cx + 480, y: cy - 220 },
+          { x: cx + 520, y: cy + 380 },
+          { x: this.worldW - 140, y: cy + 520 },
         ],
         58,
         [0.32, 0.72]
       );
     } else if (this.layout === 'coastal') {
-      // South-east coastal shoreline
+      // Coastal shoreline along the far south-east edge
       addRiverPath(
         [
-          { x: cx + 200, y: this.worldH - 180 },
-          { x: cx + 820, y: this.worldH - 360 },
-          { x: this.worldW - 520, y: cy + 560 },
-          { x: this.worldW - 220, y: cy - 120 },
+          { x: cx + 260, y: this.worldH - 120 },
+          { x: cx + 880, y: this.worldH - 220 },
+          { x: this.worldW - 260, y: cy + 620 },
+          { x: this.worldW - 120, y: cy - 80 },
         ],
-        115,
+        96,
         [0.45]
       );
     } else if (this.layout === 'oasis') {
-      // Oasis stream loop in the south-west quadrant
+      // Central oasis stream loop
       addRiverPath(
         [
-          { x: cx - 680, y: cy + 360 },
-          { x: cx - 440, y: cy + 540 },
-          { x: cx - 120, y: cy + 480 },
-          { x: cx + 180, y: cy + 620 },
+          { x: cx - 520, y: cy - 180 },
+          { x: cx - 220, y: cy + 120 },
+          { x: cx + 180, y: cy - 80 },
+          { x: cx + 460, y: cy + 220 },
         ],
         56,
         [0.5]
       );
+    }
+
+    this.rebuildObstacles();
+  }
+
+  private isSegmentCoveredByBridge(seg: RiverSegment): boolean {
+    for (const br of this.bridges) {
+      if (Phaser.Math.Distance.Between(seg.x, seg.y, br.x, br.y) <= br.radius + seg.radius * 0.42) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private rebuildObstacles(): void {
+    this.obstacles = [];
+    for (let i = 0; i < this.segments.length; i++) {
+      const seg = this.segments[i];
+      if (seg.isFord || this.isSegmentCoveredByBridge(seg)) {
+        continue;
+      }
+      if (i % 2 === 0) {
+        this.obstacles.push({
+          x: seg.x,
+          y: seg.y,
+          radius: seg.radius * 0.76,
+        });
+      }
+    }
+  }
+
+  public addBridge(id: string, x: number, y: number, radius = 90, angle = 0): void {
+    const existing = this.bridges.find((b) => b.id === id);
+    if (existing) {
+      existing.x = x;
+      existing.y = y;
+      existing.radius = radius;
+      existing.angle = angle;
+    } else {
+      this.bridges.push({ id, x, y, radius, angle });
+    }
+    this.rebuildObstacles();
+  }
+
+  public removeBridge(id: string): void {
+    const prevLen = this.bridges.length;
+    this.bridges = this.bridges.filter((b) => b.id !== id);
+    if (this.bridges.length !== prevLen) {
+      this.rebuildObstacles();
+    }
+  }
+
+  public getBridges(): RiverBridgeInfo[] {
+    return this.bridges;
+  }
+
+  public getCrossings(): Array<{ x: number; y: number; radius: number; kind: 'ford' | 'bridge' }> {
+    const out: Array<{ x: number; y: number; radius: number; kind: 'ford' | 'bridge' }> = [];
+    for (const f of this.fordCenters) {
+      out.push({ x: f.x, y: f.y, radius: f.radius, kind: 'ford' });
+    }
+    for (const b of this.bridges) {
+      out.push({ x: b.x, y: b.y, radius: b.radius, kind: 'bridge' });
+    }
+    return out;
+  }
+
+  public getNearestSegmentInfo(wx: number, wy: number): {
+    x: number;
+    y: number;
+    radius: number;
+    dist: number;
+    isFord: boolean;
+    crossAngle: number;
+  } | null {
+    if (this.segments.length === 0) return null;
+    let best = this.segments[0];
+    let bestDist = Infinity;
+    for (const seg of this.segments) {
+      const d = Phaser.Math.Distance.Between(wx, wy, seg.x, seg.y);
+      if (d < bestDist) {
+        bestDist = d;
+        best = seg;
+      }
+    }
+    // Perpendicular to river tangent so the bridge spans across both banks
+    let crossAngle = best.tangentAngle + Math.PI / 2;
+    if (crossAngle > Math.PI / 2) crossAngle -= Math.PI;
+    if (crossAngle < -Math.PI / 2) crossAngle += Math.PI;
+    return {
+      x: best.x,
+      y: best.y,
+      radius: best.radius,
+      dist: bestDist,
+      isFord: best.isFord,
+      crossAngle,
+    };
+  }
+
+  public getBankSpotFor(
+    bx: number,
+    by: number,
+    crossAngle: number,
+    fromX: number,
+    fromY: number
+  ): { x: number; y: number } {
+    const offset = 96;
+    const dx = Math.cos(crossAngle) * offset;
+    const dy = Math.sin(crossAngle) * offset;
+    const p1 = { x: bx + dx, y: by + dy };
+    const p2 = { x: bx - dx, y: by - dy };
+    const b1 = this.isPointInBlockedWater(p1.x, p1.y);
+    const b2 = this.isPointInBlockedWater(p2.x, p2.y);
+    if (!b1 && b2) return p1;
+    if (!b2 && b1) return p2;
+    const d1 = Phaser.Math.Distance.Between(fromX, fromY, p1.x, p1.y);
+    const d2 = Phaser.Math.Distance.Between(fromX, fromY, p2.x, p2.y);
+    return d1 <= d2 ? p1 : p2;
+  }
+
+  public setVisibilityCheck(isExplored: (x: number, y: number) => boolean): void {
+    for (const item of this.fordLabels) {
+      item.label.setVisible(isExplored(item.x, item.y));
     }
   }
 
@@ -171,7 +301,6 @@ export class River {
   public update(delta: number): void {
     if (this.segments.length === 0) return;
     this.rippleTimer += delta * 0.002;
-    // Redraw water ripples ~6 times per second for crisp performance
     if (Math.floor((this.rippleTimer - delta * 0.002) * 6) !== Math.floor(this.rippleTimer * 6)) {
       this.drawRiver(this.rippleTimer);
     }
@@ -246,6 +375,44 @@ export class River {
     return false;
   }
 
+  public isPointInBlockedWater(wx: number, wy: number): boolean {
+    for (const seg of this.segments) {
+      if (seg.isFord) continue;
+      if (this.isSegmentCoveredByBridge(seg)) continue;
+      const d = Phaser.Math.Distance.Between(wx, wy, seg.x, seg.y);
+      if (d <= seg.radius * 0.84) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  public isPointNearAnyWater(wx: number, wy: number, pad = 0): boolean {
+    for (const seg of this.segments) {
+      const d = Phaser.Math.Distance.Between(wx, wy, seg.x, seg.y);
+      if (d <= seg.radius + pad) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  public segmentCrossesBlockedRiver(x1: number, y1: number, x2: number, y2: number): boolean {
+    if (this.segments.length === 0) return false;
+    const dist = Math.hypot(x2 - x1, y2 - y1);
+    if (dist < 40) return false;
+    const samples = Math.min(28, Math.max(3, Math.ceil(dist / 42)));
+    for (let i = 1; i < samples; i++) {
+      const t = i / samples;
+      const sx = x1 + (x2 - x1) * t;
+      const sy = y1 + (y2 - y1) * t;
+      if (this.isPointInBlockedWater(sx, sy)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   public getNearestWadeSpot(vx: number, vy: number): { x: number; y: number } | null {
     if (this.segments.length === 0) return null;
     let bestSeg = this.segments[0];
@@ -269,8 +436,10 @@ export class River {
 
   public destroy(): void {
     this.graphics.destroy();
-    for (const lbl of this.fordLabels) lbl.destroy();
+    for (const item of this.fordLabels) item.label.destroy();
     this.fordLabels = [];
+    this.fordCenters = [];
+    this.bridges = [];
     this.segments = [];
     this.obstacles = [];
   }

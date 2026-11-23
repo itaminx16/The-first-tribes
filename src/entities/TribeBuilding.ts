@@ -24,8 +24,12 @@ export interface TotemCaptive {
   badge: Phaser.GameObjects.Text;
 }
 
-export class TribeBuilding extends Phaser.GameObjects.Container {
+export class TribeBuilding extends Phaser.GameObjects.Container implements CombatTarget {
   public readonly buildingId: string;
+  public get id(): string {
+    return this.buildingId;
+  }
+  public readonly faction = 'player' as const;
   public readonly buildingType: Exclude<BuildingType, 'hut' | 'large_hut'>;
   public readonly nameUk: string;
   public readonly descUk: string;
@@ -34,6 +38,7 @@ export class TribeBuilding extends Phaser.GameObjects.Container {
 
   public hp: number;
   public readonly maxHp: number;
+  public bridgeAngle = 0;
   public statusNote = '';
   public targetWarriors = 5;
 
@@ -54,11 +59,19 @@ export class TribeBuilding extends Phaser.GameObjects.Container {
   private progressFill: Phaser.GameObjects.Graphics;
 
   private onCompleted: (b: TribeBuilding) => void;
-  private onOpenChronicle?: () => void;
+  private onDestroyed?: (b: TribeBuilding) => void;
   private onCaptiveConverted?: (captive: TotemCaptive, building: TribeBuilding) => void;
   private findTowerTarget?: (x: number, y: number, range: number) => CombatTarget | null;
   private getWeaponTechTier?: () => number;
   private getWarriorSlots?: () => { used: number; max: number };
+  private getToolSummary?: () => { stock: number; equipped: number; target: number };
+  private getBridgeBankSpot?: (
+    bx: number,
+    by: number,
+    angle: number,
+    fx: number,
+    fy: number
+  ) => { x: number; y: number };
 
   constructor(
     scene: Phaser.Scene,
@@ -67,13 +80,23 @@ export class TribeBuilding extends Phaser.GameObjects.Container {
     id: string,
     type: Exclude<BuildingType, 'hut' | 'large_hut'>,
     onCompleted: (b: TribeBuilding) => void,
-    onOpenChronicle?: () => void,
+    _onOpenChronicle?: () => void,
     options?: {
+      bridgeAngle?: number;
       onOpenTech?: () => void;
+      onDestroyed?: (b: TribeBuilding) => void;
       onCaptiveConverted?: (captive: TotemCaptive, building: TribeBuilding) => void;
       findTowerTarget?: (x: number, y: number, range: number) => CombatTarget | null;
       getWeaponTechTier?: () => number;
       getWarriorSlots?: () => { used: number; max: number };
+      getToolSummary?: () => { stock: number; equipped: number; target: number };
+      getBridgeBankSpot?: (
+        bx: number,
+        by: number,
+        angle: number,
+        fx: number,
+        fy: number
+      ) => { x: number; y: number };
     }
   ) {
     super(scene, x, y);
@@ -84,23 +107,32 @@ export class TribeBuilding extends Phaser.GameObjects.Container {
     this.descUk = def.descUk;
     this.profession = def.profession;
     this.maxWorkers = def.maxWorkers;
-    this.maxHp = type === 'palisade' ? 240 : 380;
+    this.maxHp = type === 'palisade' ? 240 : type === 'watchtower' ? 480 : 380;
     this.hp = this.maxHp;
+    this.bridgeAngle = options?.bridgeAngle ?? 0;
     this.onCompleted = onCompleted;
-    this.onOpenChronicle = onOpenChronicle;
+    this.onDestroyed = options?.onDestroyed;
     this.onCaptiveConverted = options?.onCaptiveConverted;
     this.findTowerTarget = options?.findTowerTarget;
     this.getWeaponTechTier = options?.getWeaponTechTier;
     this.getWarriorSlots = options?.getWarriorSlots;
+    this.getToolSummary = options?.getToolSummary;
+    this.getBridgeBankSpot = options?.getBridgeBankSpot;
 
-    const ringW = type === 'palisade' ? 92 : 132;
-    const ringH = type === 'palisade' ? 42 : 58;
-    this.hoverRing = scene.add.ellipse(0, 4, ringW, ringH, 0xffe066, 0.16);
+    const ringW = type === 'palisade' ? 92 : type === 'bridge' ? 148 : 132;
+    const ringH = type === 'palisade' ? 42 : type === 'bridge' ? 74 : 58;
+    this.hoverRing = scene.add.ellipse(0, type === 'bridge' ? 0 : 4, ringW, ringH, 0xffe066, 0.16);
     this.hoverRing.setStrokeStyle(2.5, 0xffe066, 0.9);
     this.hoverRing.setVisible(false);
+    if (type === 'bridge') {
+      this.hoverRing.setRotation(this.bridgeAngle);
+    }
 
     this.sprite = scene.add.image(0, 0, `building-${type}-0`);
-    this.sprite.setOrigin(0.5, 0.825);
+    this.sprite.setOrigin(0.5, type === 'bridge' ? 0.52 : 0.825);
+    if (type === 'bridge') {
+      this.sprite.setRotation(this.bridgeAngle);
+    }
 
     this.workerBadgeBg = scene.add.graphics();
     this.workerBadgeBg.setVisible(false);
@@ -124,10 +156,14 @@ export class TribeBuilding extends Phaser.GameObjects.Container {
       this.progressBg,
       this.progressFill,
     ]);
-    this.setSize(136, 128);
-    this.setDepth(y);
+    this.setSize(type === 'bridge' ? 160 : 136, type === 'bridge' ? 110 : 128);
+    this.setDepth(type === 'bridge' ? 22 : y);
 
-    const hitCircle = new Phaser.Geom.Circle(0, -18, type === 'palisade' ? 42 : 64);
+    const hitCircle = new Phaser.Geom.Circle(
+      0,
+      type === 'bridge' ? 0 : -18,
+      type === 'palisade' ? 42 : 66
+    );
     this.setInteractive(hitCircle, Phaser.Geom.Circle.Contains);
     if (this.input) {
       this.input.cursor = CURSORS.build;
@@ -135,11 +171,6 @@ export class TribeBuilding extends Phaser.GameObjects.Container {
 
     this.on('pointerover', () => this.hoverRing.setVisible(true));
     this.on('pointerout', () => this.hoverRing.setVisible(false));
-    this.on('pointerdown', () => {
-      if (this.isComplete() && this.buildingType === 'burial_mound' && this.onOpenChronicle) {
-        this.onOpenChronicle();
-      }
-    });
 
     this.drawProgressBar();
     scene.add.existing(this);
@@ -173,7 +204,12 @@ export class TribeBuilding extends Phaser.GameObjects.Container {
     }
   }
 
-  public takeDamage(dmg: number): boolean {
+  public takeDamage(
+    dmg: number,
+    _attackerX?: number,
+    _attackerY?: number,
+    _attacker?: CombatTarget
+  ): boolean {
     if (!this.scene || this.hp <= 0) return false;
     this.hp = Math.max(0, this.hp - dmg);
     this.sprite.setTint(0xff9999);
@@ -184,6 +220,7 @@ export class TribeBuilding extends Phaser.GameObjects.Container {
 
     if (this.hp <= 0) {
       this.releaseAllOccupants();
+      this.onDestroyed?.(this);
       this.spawnBuildChips();
       this.destroy();
       return true;
@@ -192,10 +229,15 @@ export class TribeBuilding extends Phaser.GameObjects.Container {
   }
 
   public releaseAllOccupants(): void {
+    const spot = this.getWorkSpot();
     const workers = [...this.assignedWorkers];
     for (const w of workers) {
       if (w && w.scene) {
-        w.unassignFromBuilding();
+        if (this.buildingType === 'watchtower') {
+          w.exitWatchtowerGarrison(spot.x, spot.y);
+        } else {
+          w.unassignFromBuilding();
+        }
       }
     }
     this.assignedWorkers = [];
@@ -253,6 +295,18 @@ export class TribeBuilding extends Phaser.GameObjects.Container {
   }
 
   public getBuildSpotFor(vx: number, vy: number): { x: number; y: number } {
+    if (this.buildingType === 'bridge') {
+      if (this.getBridgeBankSpot) {
+        return this.getBridgeBankSpot(this.x, this.y, this.bridgeAngle, vx, vy);
+      }
+      const dx = Math.cos(this.bridgeAngle) * 96;
+      const dy = Math.sin(this.bridgeAngle) * 96;
+      const p1 = { x: this.x + dx, y: this.y + dy };
+      const p2 = { x: this.x - dx, y: this.y - dy };
+      const d1 = Phaser.Math.Distance.Between(vx, vy, p1.x, p1.y);
+      const d2 = Phaser.Math.Distance.Between(vx, vy, p2.x, p2.y);
+      return d1 <= d2 ? p1 : p2;
+    }
     const angle = Phaser.Math.Angle.Between(this.x, this.y, vx, vy);
     const rx = this.buildingType === 'palisade' ? 42 : 62;
     const ry = this.buildingType === 'palisade' ? 36 : 54;
@@ -267,8 +321,9 @@ export class TribeBuilding extends Phaser.GameObjects.Container {
   }
 
   public isPointInsideClickArea(wx: number, wy: number): boolean {
-    const r = this.buildingType === 'palisade' ? 42 : 66;
-    return Phaser.Math.Distance.Between(wx, wy, this.x, this.y - 16) <= r;
+    const r = this.buildingType === 'palisade' ? 42 : 68;
+    const cy = this.buildingType === 'bridge' ? this.y : this.y - 16;
+    return Phaser.Math.Distance.Between(wx, wy, this.x, cy) <= r;
   }
 
   public getAssignedWorkers(): Villager[] {
@@ -428,6 +483,7 @@ export class TribeBuilding extends Phaser.GameObjects.Container {
     const prof = this.profession;
     const firstLevel = first && prof ? first.getSkillLevel(prof) : 0;
     const slots = this.getWarriorSlots?.();
+    const tools = this.buildingType === 'workshop' ? this.getToolSummary?.() : undefined;
 
     return {
       id: this.buildingId,
@@ -456,6 +512,12 @@ export class TribeBuilding extends Phaser.GameObjects.Container {
       hp: this.hp,
       maxHp: this.maxHp,
       canDemolish: true,
+      toolsInStock: tools?.stock,
+      toolsEquipped: tools?.equipped,
+      toolsTarget: tools?.target,
+      garrisonedWarriorName:
+        this.buildingType === 'watchtower' ? (first?.villagerName ?? null) : undefined,
+      requiresWarrior: this.buildingType === 'watchtower',
     };
   }
 
@@ -538,28 +600,46 @@ export class TribeBuilding extends Phaser.GameObjects.Container {
     }
 
     if (this.buildingType === 'watchtower' && this.findTowerTarget) {
-      this.towerShootTimer -= delta;
-      const fireDelay = this.getAssignedWorker() ? 950 : 1550;
-      if (this.towerShootTimer <= 0) {
-        this.towerShootTimer = fireDelay;
-        const target = this.findTowerTarget(this.x, this.y, 325);
-        if (target && target.isAlive()) {
-          const techTier = this.getWeaponTechTier?.() ?? 0;
-          const mult = [1, 1.2, 1.45, 1.75][techTier] ?? 1;
-          const dmg = Math.round((this.getAssignedWorker() ? 20 : 14) * mult);
-          SoundFX.playBowShot();
-          const startY = this.y - 98;
-          const arrow = this.scene.add.image(this.x, startY, 'projectile-arrow');
-          arrow.setDepth(this.y + 80);
-          arrow.setRotation(Phaser.Math.Angle.Between(this.x, startY, target.x, target.y - 16));
-          this.scene.tweens.add({
-            targets: arrow,
-            x: target.x,
-            y: target.y - 16,
-            duration: 190,
-            onComplete: () => arrow.destroy(),
-          });
-          target.takeDamage(dmg, this.x, this.y);
+      const guard = this.getAssignedWorker();
+      if (
+        guard &&
+        guard.isAlive() &&
+        guard.warriorClass !== null &&
+        guard.state === 'WORKING_STATION'
+      ) {
+        this.towerShootTimer -= delta;
+        const wLvl = guard.getSkillLevel('warrior');
+        const fireDelay = Math.max(560, 920 - (wLvl - 1) * 65);
+        if (this.towerShootTimer <= 0) {
+          this.towerShootTimer = fireDelay;
+          const target = this.findTowerTarget(this.x, this.y, 365);
+          if (target && target.isAlive()) {
+            guard.faceWorldPoint(target.x, target.y);
+            const techTier = this.getWeaponTechTier?.() ?? 0;
+            const mult = [1, 1.2, 1.45, 1.75][techTier] ?? 1;
+            const dmg = Math.round((20 + (wLvl - 1) * 3) * mult);
+            SoundFX.playBowShot();
+            const startY = this.y - 98;
+            const arrow = this.scene.add.image(this.x, startY, 'projectile-arrow');
+            arrow.setDepth(Math.max(this.y, target.y) + 80);
+            arrow.setRotation(
+              Phaser.Math.Angle.Between(this.x, startY, target.x, target.y - 16)
+            );
+            this.scene.tweens.add({
+              targets: arrow,
+              x: target.x,
+              y: target.y - 16,
+              duration: 190,
+              onComplete: () => arrow.destroy(),
+            });
+            // Pass the Watchtower itself as attacker so enemies hit the tower before the garrisoned warrior
+            const killed = target.takeDamage(dmg, this.x, this.y, this);
+            guard.gainProfessionXp('warrior', 3);
+            if (killed) {
+              guard.deeds.enemiesSlain += 1;
+              guard.gainProfessionXp('warrior', 10);
+            }
+          }
         }
       }
     }
@@ -603,7 +683,7 @@ export class TribeBuilding extends Phaser.GameObjects.Container {
     const w = 54;
     const h = 6;
     const x = -w / 2;
-    const y = -94;
+    const y = this.buildingType === 'bridge' ? -46 : -94;
     this.progressBg.clear();
     this.progressFill.clear();
     this.progressBg.fillStyle(0x16100b, 0.85);
@@ -621,7 +701,7 @@ export class TribeBuilding extends Phaser.GameObjects.Container {
     const w = 48;
     const h = 5;
     const x = -w / 2;
-    const y = -82;
+    const y = this.buildingType === 'bridge' ? -42 : -82;
     this.progressBg.clear();
     this.progressFill.clear();
     this.progressBg.fillStyle(0x16100b, 0.85);

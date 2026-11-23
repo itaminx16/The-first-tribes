@@ -38,6 +38,7 @@ export interface SavedBuilding {
   progress: number;
   hp: number;
   targetWarriors: number;
+  angle?: number;
 }
 
 export interface SavedVillager {
@@ -69,6 +70,8 @@ export interface SavedVillager {
 
 export interface SavedRivalCamp {
   id: string;
+  x?: number;
+  y?: number;
   population: number;
   popCap: number;
   resources: Record<ResourceType, number>;
@@ -88,6 +91,9 @@ export interface SavedGameData {
   seasonIndex: number;
   season: Season;
   year: number;
+  seasonsPassed?: number;
+  playerBaseX?: number;
+  playerBaseY?: number;
   seasonElapsedMs: number;
   springRipened: boolean;
   resources: TribeResources;

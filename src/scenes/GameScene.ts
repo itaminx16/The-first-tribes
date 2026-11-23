@@ -106,7 +106,9 @@ export class GameScene extends Phaser.Scene {
   private seasonIndex = 0;
   private season: Season = SEASON_ORDER[0];
   private year = 1;
+  private seasonsPassed = 0;
   private seasonElapsedMs = 0;
+  private campCorners: Array<{ x: number; y: number }> = [];
   private springRipened = false;
   private isFreeTimeActive = false;
   private timeScale: TimeScale = 1;
@@ -223,13 +225,19 @@ export class GameScene extends Phaser.Scene {
     const preset = MAP_PRESETS[this.gameConfig.mapId] ?? MAP_PRESETS.river_valley;
     this.worldWidth = preset.worldW;
     this.worldHeight = preset.worldH;
-    this.playerBaseX = Math.round(this.worldWidth * 0.48);
-    this.playerBaseY = Math.round(this.worldHeight * 0.5);
 
     SoundFX.setMusicTrack(this.gameConfig.musicTrack);
     SoundFX.setAmbientEnabled(this.gameConfig.ambientSounds);
 
     this.input.mouse?.disableContextMenu();
+    this.createTerrain();
+    this.river = new River(this, this.worldWidth, this.worldHeight, preset.riverLayout, this.season);
+
+    const safeCorners = this.computeSafeCornerPositions(GameScene.pendingLoad);
+    this.playerBaseX = safeCorners[0].x;
+    this.playerBaseY = safeCorners[0].y;
+    this.campCorners = safeCorners.slice(1);
+
     this.cameras.main.setBounds(0, 0, this.worldWidth, this.worldHeight);
     this.cameras.main.centerOn(this.playerBaseX, this.playerBaseY);
     const logicalW = this.scale.width / GAME_DPR;
@@ -237,8 +245,6 @@ export class GameScene extends Phaser.Scene {
     const baseZoom = Math.min(logicalW, logicalH) < 520 ? 0.78 : 1.0;
     this.cameras.main.setZoom(baseZoom * GAME_DPR);
 
-    this.createTerrain();
-    this.river = new River(this, this.worldWidth, this.worldHeight, preset.riverLayout, this.season);
     this.createCampfireAndStorages();
     this.createLake();
     this.createRivalTribes();
@@ -254,7 +260,7 @@ export class GameScene extends Phaser.Scene {
       this.worldHeight,
       this.gameConfig.fogOfWar
     );
-    this.fogSystem.revealArea(this.playerBaseX, this.playerBaseY, 540);
+    this.fogSystem.revealArea(this.playerBaseX, this.playerBaseY, 560);
     this.marqueeGfx = this.add.graphics().setDepth(4500);
 
     this.weather = new WeatherSystem(this, this.season);
@@ -263,6 +269,8 @@ export class GameScene extends Phaser.Scene {
       GameScene.pendingLoad = null;
     }
     this.fogSystem.setEnabled(this.gameConfig.fogOfWar);
+    this.fogSystem.forceRender();
+    this.syncFogEntityVisibility();
     this.applySeasonToWorld();
     this.rebuildObstacleCache();
     this.setupInput();
@@ -287,7 +295,9 @@ export class GameScene extends Phaser.Scene {
     this.seasonIndex = 0;
     this.season = SEASON_ORDER[0];
     this.year = 1;
+    this.seasonsPassed = 0;
     this.seasonElapsedMs = 0;
+    this.campCorners = [];
     this.springRipened = false;
     this.isFreeTimeActive = false;
     this.timeScale = 1;
@@ -355,7 +365,7 @@ export class GameScene extends Phaser.Scene {
     GameScene.uiListenersBound = true;
 
     uiScene.events.on('ui-button-clicked', () => {
-      this.uiClickGuardUntil = this.time.now + 150;
+      this.uiClickGuardUntil = this.time.now + 260;
     });
     uiScene.events.on('next-season', () => {
       if (this.gameConfig.mode === 'sandbox') {
@@ -386,6 +396,9 @@ export class GameScene extends Phaser.Scene {
         this.assignVillagerByIdToBuilding(payload.buildingId, payload.villagerId);
       }
     );
+    uiScene.events.on('unassign-building-workers', (buildingId: string) => {
+      this.unassignBuildingWorkers(buildingId);
+    });
     uiScene.events.on(
       'train-warrior',
       (payload: { buildingId: string; warriorClass: WarriorClass; villagerId?: string }) => {
@@ -410,6 +423,8 @@ export class GameScene extends Phaser.Scene {
     uiScene.events.on('toggle-fog', () => {
       this.gameConfig.fogOfWar = !this.fogSystem.isEnabled();
       this.fogSystem.setEnabled(this.gameConfig.fogOfWar);
+      this.syncFogEntityVisibility();
+      this.emitMinimap();
       this.events.emit('config-updated', { ...this.gameConfig });
       this.showFloatingText(
         this.campfire.x,
@@ -559,6 +574,9 @@ export class GameScene extends Phaser.Scene {
       seasonIndex: this.seasonIndex,
       season: this.season,
       year: this.year,
+      seasonsPassed: this.seasonsPassed,
+      playerBaseX: this.playerBaseX,
+      playerBaseY: this.playerBaseY,
       seasonElapsedMs: this.seasonElapsedMs,
       springRipened: this.springRipened,
       resources: {
@@ -587,7 +605,8 @@ export class GameScene extends Phaser.Scene {
           y: b.y,
           progress: b.getProgress(),
           hp: b.hp,
-          targetWarriors: b.targetWarriors
+          targetWarriors: b.targetWarriors,
+          angle: b.bridgeAngle
         })),
       villagers: this.villagers
         .filter((v) => v.isAlive())
@@ -619,6 +638,8 @@ export class GameScene extends Phaser.Scene {
         })),
       rivals: this.rivalSystem.camps.map((c) => ({
         id: c.id,
+        x: c.x,
+        y: c.y,
         population: c.population,
         popCap: c.popCap,
         resources: { ...c.resources },
@@ -649,6 +670,8 @@ export class GameScene extends Phaser.Scene {
     this.seasonIndex = save.seasonIndex;
     this.season = save.season;
     this.year = save.year;
+    this.seasonsPassed = save.seasonsPassed ?? 0;
+    this.rivalSystem.setSeasonsPassed(this.seasonsPassed);
     this.seasonElapsedMs = save.seasonElapsedMs;
     this.springRipened = save.springRipened;
     this.storageCap = save.storageCap;
@@ -669,7 +692,7 @@ export class GameScene extends Phaser.Scene {
         this,
         sh.x,
         sh.y,
-        () => {},
+        (completedHut) => this.handleHutCompleted(completedHut),
         (bHut, parentA, parentB) => this.handleBirthReady(bHut, parentA, parentB),
         sh.isLarge
       );
@@ -689,18 +712,9 @@ export class GameScene extends Phaser.Scene {
         sb.y,
         sb.id,
         sb.type,
-        () => {},
+        (completedB) => this.handleBuildingCompleted(completedB),
         () => this.openChronicle(),
-        {
-          onOpenTech: () => this.events.emit('open-tech-modal'),
-          onCaptiveConverted: (captive, building) => this.spawnConvertedCaptiveVillager(captive, building),
-          findTowerTarget: (tx, ty, range) => this.findNearestHostileForPlayer(tx, ty, range),
-          getWeaponTechTier: () => this.techLevels.weapons,
-          getWarriorSlots: () => ({
-            used: this.villagers.filter((v) => v.isAlive() && v.warriorClass !== null).length,
-            max: this.warriorCap
-          })
-        }
+        this.createBuildingOptions(sb.angle ?? 0)
       );
       if (sb.progress > 0) {
         tb.addBuildWork(sb.progress * 2);
@@ -710,6 +724,9 @@ export class GameScene extends Phaser.Scene {
       tb.setSeason(this.season);
       this.buildings.push(tb);
 
+      if (sb.type === 'bridge' && tb.isComplete()) {
+        this.river.addBridge(tb.buildingId, tb.x, tb.y, 92, tb.bridgeAngle);
+      }
       if (sb.type === 'granary' && tb.isComplete()) {
         for (const st of Object.values(this.storages)) {
           st.setMaxCapacity(this.storageCap);
@@ -770,7 +787,9 @@ export class GameScene extends Phaser.Scene {
       v.refreshMaxHealth();
       if (sv.assignedBuildingId) {
         const b = this.buildings.find((item) => item.buildingId === sv.assignedBuildingId && item.isComplete());
-        if (b) v.issueAssignBuilding(b);
+        if (b && b.profession) {
+          v.issueAssignBuilding(b);
+        }
       }
       this.villagers.push(v);
       this.fogSystem.revealArea(v.x, v.y, 320);
@@ -907,6 +926,30 @@ export class GameScene extends Phaser.Scene {
       }
     }
     this.fogSystem.update(delta, viewers);
+    this.syncFogEntityVisibility();
+  }
+
+  private syncFogEntityVisibility(): void {
+    if (!this.fogSystem) return;
+    const enabled = this.fogSystem.isEnabled();
+    const isVis = (x: number, y: number) => !enabled || this.fogSystem.isVisibleAt(x, y);
+    const isExp = (x: number, y: number) => !enabled || this.fogSystem.isExploredAt(x, y);
+
+    for (const a of this.animals) {
+      if (a.isAlive()) a.setVisible(isVis(a.x, a.y));
+    }
+    for (const p of this.predators) {
+      if (p.isAlive()) p.setVisible(isVis(p.x, p.y));
+    }
+    for (const c of this.carcasses) {
+      if (c.scene) c.setVisible(isExp(c.x, c.y));
+    }
+    if (this.river) {
+      this.river.setVisibilityCheck(isExp);
+    }
+    if (this.rivalSystem) {
+      this.rivalSystem.syncFogVisibility(isVis, isExp);
+    }
   }
 
   private emitRivals(): void {
@@ -1011,7 +1054,12 @@ export class GameScene extends Phaser.Scene {
       camH: cam.worldView.height,
       playerCamp: { x: this.playerBaseX, y: this.playerBaseY },
       lake: { x: this.lake.x, y: this.lake.y },
-      riverPoints: this.river ? this.river.getMinimapPoints() : [],
+      riverPoints: this.river
+        ? this.river
+            .getMinimapPoints()
+            .filter((rp) => !this.fogSystem.isEnabled() || this.fogSystem.isExploredAt(rp.x, rp.y))
+        : [],
+      bridges: this.river ? this.river.getBridges().map((b) => ({ x: b.x, y: b.y })) : [],
       playerUnits: this.villagers
         .filter((v) => v.isAlive())
         .map((v) => ({
@@ -1020,7 +1068,9 @@ export class GameScene extends Phaser.Scene {
           isWarrior: v.warriorClass !== null,
           selected: this.selectedVillagers.includes(v)
         })),
-      predators: this.predators.filter((p) => p.isAlive()).map((p) => ({ x: p.x, y: p.y })),
+      predators: this.predators
+        .filter((p) => p.isAlive() && this.fogSystem.isVisibleAt(p.x, p.y))
+        .map((p) => ({ x: p.x, y: p.y })),
       rivals: this.rivalSystem.camps.map((c) => ({
         x: c.x,
         y: c.y,
@@ -1033,7 +1083,8 @@ export class GameScene extends Phaser.Scene {
       enemyUnits: this.rivalSystem.units
         .filter((u) => u.isAlive() && this.fogSystem.isVisibleAt(u.x, u.y))
         .map((u) => ({ x: u.x, y: u.y, color: u.tribeColor })),
-      fogEnabled: this.fogSystem.isEnabled()
+      fogEnabled: this.fogSystem.isEnabled(),
+      fogGrid: this.fogSystem.isEnabled() ? this.fogSystem.getMinimapFogGrid() : undefined
     };
     this.events.emit('minimap-updated', data);
   }
@@ -1098,6 +1149,7 @@ export class GameScene extends Phaser.Scene {
     this.springRipened = false;
     this.isFreeTimeActive = false;
     this.year += YEARS_PER_SEASON_CHANGE;
+    this.seasonsPassed += 1;
 
     this.applySeasonToWorld();
     const preset = MAP_PRESETS[this.gameConfig.mapId] ?? MAP_PRESETS.river_valley;
@@ -1108,7 +1160,7 @@ export class GameScene extends Phaser.Scene {
       this.ensureSeasonalWildlife();
       this.ensureSeasonalPredators();
     }
-    this.rivalSystem.onSeasonChanged();
+    this.rivalSystem.onSeasonChanged(this.season, this.seasonsPassed);
     for (const b of this.buildings) {
       if (b.scene && b.isComplete()) {
         b.onSeasonChanged();
@@ -1345,6 +1397,9 @@ export class GameScene extends Phaser.Scene {
     if (this.buildGhost && this.buildGhostRing) {
       if (type) {
         this.buildGhost.setTexture(this.getGhostTextureKey(type));
+        this.buildGhost.setOrigin(0.5, type === 'bridge' ? 0.52 : 0.825);
+        this.buildGhost.setRotation(0);
+        this.buildGhostRing.setRotation(0);
         this.buildGhost.setVisible(true);
         this.buildGhostRing.setVisible(true);
 
@@ -1398,14 +1453,30 @@ export class GameScene extends Phaser.Scene {
 
   private updateBuildGhostAtWorld(wx: number, wy: number): void {
     if (!this.buildGhost || !this.buildGhostRing || !this.buildType) return;
-    this.buildGhostWorldX = wx;
-    this.buildGhostWorldY = wy;
+    let gx = wx;
+    let gy = wy;
+    let rot = 0;
 
-    this.buildGhost.setPosition(wx, wy);
-    this.buildGhostRing.setPosition(wx, wy + 4);
+    if (this.buildType === 'bridge' && this.river) {
+      const info = this.river.getNearestSegmentInfo(wx, wy);
+      if (info && info.dist <= info.radius * 1.35) {
+        gx = info.x;
+        gy = info.y;
+        rot = info.crossAngle;
+      }
+      this.buildGhost.setOrigin(0.5, 0.52);
+    } else {
+      this.buildGhost.setOrigin(0.5, 0.825);
+    }
+
+    this.buildGhostWorldX = gx;
+    this.buildGhostWorldY = gy;
+
+    this.buildGhost.setPosition(gx, gy).setRotation(rot);
+    this.buildGhostRing.setPosition(gx, gy + (this.buildType === 'bridge' ? 0 : 4)).setRotation(rot);
 
     const canAfford = this.canAffordBuilding(this.buildType);
-    const valid = canAfford && this.canPlaceBuildingAt(wx, wy, this.buildType);
+    const valid = canAfford && this.canPlaceBuildingAt(gx, gy, this.buildType);
 
     if (valid) {
       this.buildGhost.setTint(0xa7f3d0);
@@ -1431,6 +1502,33 @@ export class GameScene extends Phaser.Scene {
     if (wx < 110 || wx > this.worldWidth - 110 || wy < 130 || wy > this.worldHeight - 100) {
       return false;
     }
+
+    if (type === 'bridge') {
+      if (!this.river) return false;
+      const info = this.river.getNearestSegmentInfo(wx, wy);
+      if (!info || info.dist > info.radius * 1.2 || info.isFord) {
+        return false;
+      }
+      if (Phaser.Math.Distance.Between(info.x, info.y, this.lake.x, this.lake.y) < 170) {
+        return false;
+      }
+      for (const c of this.rivalSystem.camps) {
+        if (Phaser.Math.Distance.Between(info.x, info.y, c.x, c.y) < 180) {
+          return false;
+        }
+      }
+      for (const b of this.buildings) {
+        if (
+          b.scene &&
+          b.buildingType === 'bridge' &&
+          Phaser.Math.Distance.Between(info.x, info.y, b.x, b.y) < 120
+        ) {
+          return false;
+        }
+      }
+      return true;
+    }
+
     const minCampDist = type === 'palisade' ? 115 : 150;
     if (Phaser.Math.Distance.Between(wx, wy, this.campfire.x, this.campfire.y) < minCampDist) {
       return false;
@@ -1483,8 +1581,27 @@ export class GameScene extends Phaser.Scene {
       SoundFX.playBlocked();
       return;
     }
-    if (!this.canPlaceBuildingAt(wx, wy, this.buildType)) {
-      this.showFloatingText(wx, wy - 20, 'Тут не можна будувати!');
+
+    let placeX = wx;
+    let placeY = wy;
+    let bridgeAngle = 0;
+    if (this.buildType === 'bridge' && this.river) {
+      const info = this.river.getNearestSegmentInfo(wx, wy);
+      if (info && info.dist <= info.radius * 1.35) {
+        placeX = info.x;
+        placeY = info.y;
+        bridgeAngle = info.crossAngle;
+      }
+    }
+
+    if (!this.canPlaceBuildingAt(placeX, placeY, this.buildType)) {
+      this.showFloatingText(
+        placeX,
+        placeY - 20,
+        this.buildType === 'bridge'
+          ? 'Міст потрібно ставити на річці (поза бродом)!'
+          : 'Тут не можна будувати!'
+      );
       SoundFX.playBlocked();
       return;
     }
@@ -1496,10 +1613,12 @@ export class GameScene extends Phaser.Scene {
     this.syncStorageAmounts();
     this.emitResources();
 
-    // Clear any encroaching trees, stumps, stones, or bushes inside the building's footprint
-    for (const node of [...this.resourceNodes]) {
-      if (node.scene && !node.isInfinite && Phaser.Math.Distance.Between(wx, wy, node.x, node.y) < 110) {
-        node.clearNode();
+    // Clear any encroaching trees, stumps, stones, or bushes inside land building's footprint
+    if (this.buildType !== 'bridge') {
+      for (const node of [...this.resourceNodes]) {
+        if (node.scene && !node.isInfinite && Phaser.Math.Distance.Between(placeX, placeY, node.x, node.y) < 110) {
+          node.clearNode();
+        }
       }
     }
 
@@ -1509,8 +1628,8 @@ export class GameScene extends Phaser.Scene {
       const isLarge = placedType === 'large_hut';
       const hut = new Hut(
         this,
-        wx,
-        wy,
+        placeX,
+        placeY,
         (completedHut) => this.handleHutCompleted(completedHut),
         (bHut, parentA, parentB) => this.handleBirthReady(bHut, parentA, parentB),
         isLarge
@@ -1522,22 +1641,13 @@ export class GameScene extends Phaser.Scene {
       this.buildingCounter += 1;
       const tb = new TribeBuilding(
         this,
-        wx,
-        wy,
+        placeX,
+        placeY,
         `bld-${this.buildingCounter}`,
         placedType,
         (completedB) => this.handleBuildingCompleted(completedB),
         () => this.openChronicle(),
-        {
-          onOpenTech: () => this.events.emit('open-tech-modal'),
-          onCaptiveConverted: (captive, building) => this.spawnConvertedCaptiveVillager(captive, building),
-          findTowerTarget: (tx, ty, range) => this.findNearestHostileForPlayer(tx, ty, range),
-          getWeaponTechTier: () => this.techLevels.weapons,
-          getWarriorSlots: () => ({
-            used: this.villagers.filter((v) => v.isAlive() && v.warriorClass !== null).length,
-            max: this.warriorCap
-          })
-        }
+        this.createBuildingOptions(bridgeAngle)
       );
       tb.setSeason(this.season);
       this.buildings.push(tb);
@@ -1545,7 +1655,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     SoundFX.playOrder();
-    this.spawnTargetRing(wx, wy + 4, 0xfbbf24, true);
+    this.spawnTargetRing(placeX, placeY + 4, 0xfbbf24, true);
     this.setBuildMode(null);
 
     let assigned = 0;
@@ -1555,6 +1665,72 @@ export class GameScene extends Phaser.Scene {
         assigned += 1;
         if (assigned >= 2) break;
       }
+    }
+  }
+
+  private createBuildingOptions(bridgeAngle = 0) {
+    return {
+      bridgeAngle,
+      onOpenTech: () => this.events.emit('open-tech-modal'),
+      onDestroyed: (destroyed: TribeBuilding) => this.handleBuildingDestroyed(destroyed),
+      onCaptiveConverted: (captive: TotemCaptive, building: TribeBuilding) =>
+        this.spawnConvertedCaptiveVillager(captive, building),
+      findTowerTarget: (tx: number, ty: number, range: number) =>
+        this.findNearestHostileForPlayer(tx, ty, range),
+      getWeaponTechTier: () => this.techLevels.weapons,
+      getWarriorSlots: () => ({
+        used: this.villagers.filter((v) => v.isAlive() && v.warriorClass !== null).length,
+        max: this.warriorCap
+      }),
+      getToolSummary: () => ({
+        stock: this.resources.tools,
+        equipped: this.villagers.filter((v) => v.isAlive() && v.hasCraftedTools).length,
+        target: this.villagers.filter((v) => v.isAlive()).length + TOOL_RESERVE_BUFFER
+      }),
+      getBridgeBankSpot: (bx: number, by: number, angle: number, fx: number, fy: number) =>
+        this.river
+          ? this.river.getBankSpotFor(bx, by, angle, fx, fy)
+          : { x: bx + Math.cos(angle) * 96, y: by + Math.sin(angle) * 96 }
+    };
+  }
+
+  private handleBuildingDestroyed(b: TribeBuilding): void {
+    if (this.selectedBuilding === b) {
+      this.selectBuilding(null);
+    }
+    this.buildings = this.buildings.filter((item) => item !== b && Boolean(item.scene));
+    if (b.buildingType === 'watchtower') {
+      this.showFloatingText(b.x, b.y - 68, '💥 Сторожову вежу зруйновано! Воїн продовжує бій!');
+    } else if (b.buildingType === 'bridge' && this.river) {
+      this.river.removeBridge(b.buildingId);
+    } else if (b.buildingType === 'barracks') {
+      this.recomputeWarriorCap();
+    } else if (b.buildingType === 'granary') {
+      this.restoreCampfireStorageIfNoGranary();
+    }
+    this.rebuildObstacleCache();
+    this.emitPopulation();
+    this.emitRoster();
+  }
+
+  private restoreCampfireStorageIfNoGranary(): void {
+    const hasGranary = this.buildings.some(
+      (item) => item.scene && item.buildingType === 'granary' && item.isComplete()
+    );
+    if (!hasGranary && this.campfireStoragesHidden) {
+      this.storageCap = Math.max(MAX_STORAGE, this.storageCap - GRANARY_STORAGE_BONUS);
+      this.resources.storageCap = this.storageCap;
+      this.campfireStoragesHidden = false;
+      for (const st of Object.values(this.storages)) {
+        st.setMaxCapacity(this.storageCap);
+        st.setVisible(true);
+        st.setInteractive();
+      }
+      for (const d of this.campfirePathDecals) {
+        d.setVisible(true);
+      }
+      this.syncStorageAmounts();
+      this.emitResources();
     }
   }
 
@@ -1579,7 +1755,7 @@ export class GameScene extends Phaser.Scene {
         `🏠 Комора зведена! Склади біля вогнища прибрано (+${GRANARY_STORAGE_BONUS} місткості)`
       );
     } else if (b.buildingType === 'workshop') {
-      this.showFloatingText(b.x, b.y - 68, '🛠️ Майстерня зведена! (інструменти з кісток, запас +5)');
+      this.showFloatingText(b.x, b.y - 68, '🛠️ Майстерня зведена! (інструменти для всіх +5 у запас)');
     } else if (b.buildingType === 'armory') {
       this.showFloatingText(b.x, b.y - 68, '⚔️ Зброярня зведена! (зброя та броня, запас +10)');
     } else if (b.buildingType === 'barracks') {
@@ -1595,7 +1771,14 @@ export class GameScene extends Phaser.Scene {
     } else if (b.buildingType === 'gatherer_hut') {
       this.showFloatingText(b.x, b.y - 68, '🧺 Хатина збирача зведена! (до 3 збирачів)');
     } else if (b.buildingType === 'watchtower') {
-      this.showFloatingText(b.x, b.y - 68, '🏹 Сторожова вежа зведена!');
+      this.showFloatingText(b.x, b.y - 68, '🏹 Сторожова вежа зведена! (призначте воїна)');
+    } else if (b.buildingType === 'bridge') {
+      if (this.river) {
+        this.river.addBridge(b.buildingId, b.x, b.y, 92, b.bridgeAngle);
+      }
+      this.rebuildObstacleCache();
+      this.emitMinimap();
+      this.showFloatingText(b.x, b.y - 54, '🌉 Міст збудовано! Можна переходити річку');
     } else if (b.buildingType === 'smokehouse') {
       this.showFloatingText(b.x, b.y - 68, '🔥 Коптильня зведена!');
     } else if (b.buildingType === 'totem') {
@@ -1609,11 +1792,11 @@ export class GameScene extends Phaser.Scene {
   }
 
   private evaluateCraftingPlan(buildingType: 'workshop' | 'armory'): CraftPlan {
-    const livingAdults = this.villagers.filter((v) => v.isAlive() && !v.isChild).length;
+    const livingVillagers = this.villagers.filter((v) => v.isAlive()).length;
     const equippedTools = this.villagers.filter(
       (v) => v.isAlive() && !v.isChild && v.hasCraftedTools
     ).length;
-    const toolLimit = livingAdults + TOOL_RESERVE_BUFFER;
+    const toolLimit = livingVillagers + TOOL_RESERVE_BUFFER;
     const needTools = Math.max(0, toolLimit - (equippedTools + this.resources.tools));
 
     const canPay = (cost: Partial<Record<ResourceType, number>>): boolean => {
@@ -1641,7 +1824,7 @@ export class GameScene extends Phaser.Scene {
             canWork: true,
             kind: 'tool',
             cost: { ...TOOL_CRAFT_COST },
-            statusText: `Кує інструменти (ліміт ${livingAdults}+5)`
+            statusText: `⚒️ Кує інструменти (${equippedTools + this.resources.tools}/${toolLimit})`
           };
         }
         return {
@@ -1649,16 +1832,10 @@ export class GameScene extends Phaser.Scene {
           statusText: missingText(TOOL_CRAFT_COST)
         };
       }
-      // If tools limit reached and no active armory, workshop can also forge backup spears
-      const hasArmory = this.buildings.some(
-        (b) => b.scene && b.buildingType === 'armory' && b.isComplete() && b.getAssignedWorker()
-      );
-      if (hasArmory) {
-        return {
-          canWork: false,
-          statusText: `Ліміт інструментів (${livingAdults}+5) досягнуто`
-        };
-      }
+      return {
+        canWork: false,
+        statusText: `✅ Запас інструментів повний (${equippedTools + this.resources.tools}/${toolLimit})`
+      };
     }
 
     // Weapon & armor needs for warriors without gear + 10 defense reserve each
@@ -1755,6 +1932,11 @@ export class GameScene extends Phaser.Scene {
       this.tryAutoEquipWarriors();
     }
 
+    const nextPlan = this.evaluateCraftingPlan(type);
+    building.statusNote = nextPlan.statusText;
+    if (this.selectedBuilding === building) {
+      this.events.emit('building-selected', building.getSnapshot());
+    }
     this.emitResources();
   }
 
@@ -1840,7 +2022,13 @@ export class GameScene extends Phaser.Scene {
 
     if (bType === 'barracks') {
       this.recomputeWarriorCap();
+    } else if (bType === 'bridge' && this.river) {
+      this.river.removeBridge(buildingId);
+    } else if (bType === 'granary') {
+      this.restoreCampfireStorageIfNoGranary();
     }
+    this.rebuildObstacleCache();
+    this.emitMinimap();
     SoundFX.playHammer();
     this.showFloatingText(bx, by - 54, `🗑️ Зруйновано: ${bName} (+${refundW}🪵 +${refundS}🪨)`);
     this.emitResources();
@@ -1852,11 +2040,39 @@ export class GameScene extends Phaser.Scene {
     const b = this.buildings.find((item) => item.buildingId === buildingId && item.scene);
     const worker = this.villagers.find((v) => v.id === villagerId && v.isAlive() && !v.isChild);
     if (!b || !b.isComplete() || !b.profession || !worker) return;
-    this.selectVillagerList([worker]);
+    if (b.buildingType === 'watchtower' && !worker.warriorClass) {
+      this.showFloatingText(b.x, b.y - 66, '🏹 На сторожову вежу можна призначити лише воїна!');
+      SoundFX.playBlocked();
+      return;
+    }
+    if (!worker.issueAssignBuilding(b)) {
+      SoundFX.playBlocked();
+      return;
+    }
+    this.selectVillagerList([]);
     SoundFX.playOrder();
-    worker.issueAssignBuilding(b);
     this.spawnTargetRing(b.x, b.y + 4, 0xfbbf24, true);
     this.showFloatingText(b.x, b.y - 66, `🛠️ ${worker.villagerName} → ${b.nameUk}`);
+    this.events.emit('building-selected', b.getSnapshot());
+    this.emitRoster();
+  }
+
+  private unassignBuildingWorkers(buildingId: string): void {
+    const b = this.buildings.find((item) => item.buildingId === buildingId && item.scene);
+    if (!b) return;
+    const workers = [...b.getAssignedWorkers()];
+    if (workers.length === 0) return;
+    const spot = b.getWorkSpot();
+    for (const w of workers) {
+      if (b.buildingType === 'watchtower') {
+        w.exitWatchtowerGarrison(spot.x, spot.y);
+      } else {
+        w.unassignFromBuilding();
+        w.issueMoveOrder(spot.x, spot.y + 12);
+      }
+    }
+    SoundFX.playOrder();
+    this.showFloatingText(b.x, b.y - 60, `🔄 Звільнено працівників: ${b.nameUk}`);
     this.events.emit('building-selected', b.getSnapshot());
     this.emitRoster();
   }
@@ -1994,6 +2210,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     candidate.setWarriorRole(wClass, weapon, armor, barracks);
+    this.selectVillagerList([]);
     SoundFX.playFanfare();
     this.showFloatingText(
       candidate.x,
@@ -2002,7 +2219,7 @@ export class GameScene extends Phaser.Scene {
     );
     this.emitPopulation();
     this.emitResources();
-    this.emitSelection();
+    this.emitRoster();
     this.events.emit('building-selected', barracks.getSnapshot());
   }
 
@@ -2078,9 +2295,9 @@ export class GameScene extends Phaser.Scene {
       );
     }
 
-    // Warriors anywhere nearby sprint directly to intercept attackers!
+    // Warriors anywhere nearby sprint directly to intercept attackers (Watchtower guards hold their tower post!)
     for (const v of this.villagers) {
-      if (!v.isAlive() || v.isChild) continue;
+      if (!v.isAlive() || v.isChild || v.isGarrisonedInWatchtower()) continue;
       if (v.warriorClass) {
         if (!v.isInCombat()) {
           v.respondToAlarm(threat, false);
@@ -2100,9 +2317,9 @@ export class GameScene extends Phaser.Scene {
   private checkProximityDefense(): void {
     const campHostile = this.findNearestHostileForPlayer(this.campfire.x, this.campfire.y, 380);
     if (campHostile) {
-      // Auto-engage idle warriors near campfire
+      // Auto-engage idle warriors near campfire (excluding garrisoned watchtower archers)
       for (const v of this.villagers) {
-        if (v.isAlive() && v.warriorClass && !v.isInCombat()) {
+        if (v.isAlive() && v.warriorClass && !v.isInCombat() && !v.isGarrisonedInWatchtower()) {
           v.issueCombatOrder(campHostile);
         }
       }
@@ -2110,7 +2327,7 @@ export class GameScene extends Phaser.Scene {
 
     // Warn civilians near predators/raiders
     for (const v of this.villagers) {
-      if (!v.isAlive() || v.isChild || v.isInCombat() || v.warriorClass) continue;
+      if (!v.isAlive() || v.isChild || v.isInCombat() || v.warriorClass || v.isGarrisonedInWatchtower()) continue;
       const nearbyDanger = this.findNearestHostileForPlayer(v.x, v.y, 130);
       if (nearbyDanger) {
         if (v.equippedWeapon) {
@@ -2164,11 +2381,21 @@ export class GameScene extends Phaser.Scene {
       SoundFX.playBlocked();
       return;
     }
+    if (b.buildingType === 'watchtower' && !worker.warriorClass) {
+      this.showFloatingText(b.x, b.y - 66, '🏹 На сторожову вежу можна призначити лише воїна!');
+      SoundFX.playBlocked();
+      return;
+    }
+    if (!worker.issueAssignBuilding(b)) {
+      SoundFX.playBlocked();
+      return;
+    }
+    this.selectVillagerList([]);
     SoundFX.playOrder();
-    worker.issueAssignBuilding(b);
     this.spawnTargetRing(b.x, b.y + 4, 0xfbbf24, true);
     this.showFloatingText(b.x, b.y - 66, `🛠️ ${worker.villagerName} → ${b.nameUk}`);
     this.events.emit('building-selected', b.getSnapshot());
+    this.emitRoster();
   }
 
   private handleHutCompleted(hut: Hut): void {
@@ -2355,8 +2582,90 @@ export class GameScene extends Phaser.Scene {
     this.storages.hide.setAmount(this.resources.hide);
   }
 
+  private computeSafeCornerPositions(
+    save: SavedGameData | null
+  ): Array<{ x: number; y: number }> {
+    const W = this.worldWidth;
+    const H = this.worldHeight;
+    const center = { x: W * 0.5, y: H * 0.5 };
+    const baseFracs: Array<[number, number]> = [
+      [0.16, 0.83], // Player corner (South-West)
+      [0.16, 0.17], // Rival 1 corner (North-West)
+      [0.84, 0.17], // Rival 2 corner (North-East)
+      [0.83, 0.81], // Rival 3 corner (South-East)
+    ];
+
+    const adjustAwayFromWater = (sx: number, sy: number): { x: number; y: number } => {
+      let x = Phaser.Math.Clamp(sx, 260, W - 260);
+      let y = Phaser.Math.Clamp(sy, 250, H - 250);
+      for (let step = 0; step < 8; step++) {
+        if (!this.river || !this.river.isPointNearAnyWater(x, y, 220)) {
+          return { x: Math.round(x), y: Math.round(y) };
+        }
+        const a = Phaser.Math.Angle.Between(x, y, center.x, center.y);
+        x = Phaser.Math.Clamp(x + Math.cos(a) * 140, 260, W - 260);
+        y = Phaser.Math.Clamp(y + Math.sin(a) * 120, 250, H - 250);
+      }
+      return { x: Math.round(x), y: Math.round(y) };
+    };
+
+    const corners = baseFracs.map(([fx, fy]) => adjustAwayFromWater(W * fx, H * fy));
+    if (save?.playerBaseX && save?.playerBaseY) {
+      corners[0] = { x: save.playerBaseX, y: save.playerBaseY };
+    }
+    if (save?.rivals) {
+      save.rivals.forEach((sr, idx) => {
+        if (sr.x && sr.y && corners[idx + 1]) {
+          corners[idx + 1] = { x: sr.x, y: sr.y };
+        }
+      });
+    }
+    return corners;
+  }
+
+  private getPlayerDefenseTargets(): CombatTarget[] {
+    const out: CombatTarget[] = [];
+    for (const v of this.villagers) {
+      if (!v.isAlive()) continue;
+      // Garrisoned watchtower archers cannot be struck directly; enemies hit the tower first!
+      if (v.isGarrisonedInWatchtower() && v.state === 'WORKING_STATION') continue;
+      out.push(v);
+    }
+    for (const b of this.buildings) {
+      if (
+        b.isAlive() &&
+        b.isComplete() &&
+        b.buildingType === 'watchtower' &&
+        b.getAssignedWorker() !== null
+      ) {
+        out.push(b);
+      }
+    }
+    return out;
+  }
+
   private createLake(): void {
-    this.lake = new Lake(this, this.playerBaseX + 360, this.playerBaseY + 195, this.season);
+    const W = this.worldWidth;
+    const H = this.worldHeight;
+    const dirX = this.playerBaseX < W * 0.5 ? 1 : -1;
+    const dirY = this.playerBaseY < H * 0.5 ? 1 : -1;
+    const offsets = [
+      { dx: dirX * 370, dy: dirY * 195 },
+      { dx: dirX * 420, dy: 0 },
+      { dx: 0, dy: dirY * 320 },
+    ];
+    let lx = this.playerBaseX + offsets[0].dx;
+    let ly = this.playerBaseY + offsets[0].dy;
+    for (const o of offsets) {
+      const cx = Phaser.Math.Clamp(this.playerBaseX + o.dx, 240, W - 240);
+      const cy = Phaser.Math.Clamp(this.playerBaseY + o.dy, 220, H - 220);
+      if (!this.river || !this.river.isPointNearAnyWater(cx, cy, 175)) {
+        lx = cx;
+        ly = cy;
+        break;
+      }
+    }
+    this.lake = new Lake(this, Math.round(lx), Math.round(ly), this.season);
   }
 
   private createRivalTribes(): void {
@@ -2364,15 +2673,18 @@ export class GameScene extends Phaser.Scene {
       worldW: this.worldWidth,
       worldH: this.worldHeight,
       rivalCount: this.gameConfig.rivalCount,
+      campCorners: this.campCorners,
       getPlayerCampPos: () => ({ x: this.playerBaseX, y: this.playerBaseY }),
       getPlayerPop: () => this.villagers.length,
-      getPlayerTargets: () => this.villagers.filter((v) => v.isAlive()),
+      getPlayerTargets: () => this.getPlayerDefenseTargets(),
       getResourceNodes: () => this.resourceNodes,
       getObstacles: () => this.getObstacles(),
+      getRiver: () => this.river ?? null,
       findBlockingBarricade: (ex, ey, range) => {
         for (const b of this.buildings) {
-          if (!b.isAlive() || !b.isComplete()) continue;
-          if (Phaser.Math.Distance.Between(ex, ey, b.x, b.y) <= range + 28) {
+          if (!b.isAlive() || !b.isComplete() || b.buildingType === 'bridge') continue;
+          const pad = b.buildingType === 'palisade' ? 28 : 48;
+          if (Phaser.Math.Distance.Between(ex, ey, b.x, b.y) <= range + pad) {
             return b;
           }
         }
@@ -2662,8 +2974,9 @@ export class GameScene extends Phaser.Scene {
           worldW: this.worldWidth,
           worldH: this.worldHeight,
           getObstacles: () => this.getObstacles(),
+          getRiver: () => this.river ?? null,
           getPotentialPrey: () => [
-            ...this.villagers.filter((v) => v.isAlive()),
+            ...this.getPlayerDefenseTargets(),
             ...this.rivalSystem.units.filter((u) => u.isAlive())
           ],
           onAttackTarget: (p, target) => {
@@ -2764,6 +3077,7 @@ export class GameScene extends Phaser.Scene {
       onEnemyConvertedToCaptive: (enemy, shaman) => this.handleEnemyConvertedToCaptive(enemy, shaman),
       findUnfinishedBuilding: (x, y) => this.findUnfinishedBuilding(x, y),
       getObstacles: () => this.getObstacles(),
+      getRiver: () => this.river ?? null,
       getStoragePoint: (type: ResourceType) => {
         if (this.campfireStoragesHidden) {
           const granary = this.buildings.find(
@@ -2803,14 +3117,6 @@ export class GameScene extends Phaser.Scene {
       onStationCycleComplete: (_villager, building) => {
         if (building.buildingType === 'workshop' || building.buildingType === 'armory') {
           this.completeCraftingStation(building);
-        } else if (building.buildingType === 'granary') {
-          const added = Math.min(3, Math.max(0, this.storageCap - this.resources.food));
-          if (added > 0) {
-            this.resources.food += added;
-            this.storages.food.setAmount(this.resources.food);
-            this.emitResources();
-            this.showFloatingText(building.x, building.y - 68, `+${added} Їжа (Комора)`);
-          }
         } else if (building.buildingType === 'smokehouse') {
           const added = Math.min(4, Math.max(0, this.storageCap - this.resources.food));
           if (added > 0) {
@@ -2936,7 +3242,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     for (const b of this.buildings) {
-      if (!b.scene) continue;
+      if (!b.scene || b.buildingType === 'bridge') continue;
       obstacles.push({
         x: b.x,
         y: b.y + 4,
@@ -2997,7 +3303,11 @@ export class GameScene extends Phaser.Scene {
         S: this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.S),
         D: this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D)
       };
-      this.input.keyboard.on('keydown-T', () => this.advanceSeason(true));
+      this.input.keyboard.on('keydown-T', () => {
+        if (this.gameConfig.mode === 'sandbox') {
+          this.advanceSeason(true);
+        }
+      });
       this.input.keyboard.on('keydown-R', () => this.toggleManualDefenseAlarm());
       this.input.keyboard.on('keydown-ESC', () => {
         if (this.isBuildMode) {
@@ -3269,14 +3579,19 @@ export class GameScene extends Phaser.Scene {
         } else {
           // Android / Touch Tap rules:
           // 1) Tap villager -> select
-          // 2) Tap finished building -> open building panel / chronicle
+          // 2) Tap finished building -> open building panel / chronicle (unless tapping a completed Bridge while units are selected -> walk over it!)
           // 3) Tap campfire -> open defense alarm panel
           // 4) Tap resource / lake / animal / hostile / unfinished site / ground with selected unit(s) -> issue order
           // 5) Otherwise close open building panel
+          const walkingOverBridge =
+            hitBuilding &&
+            hitBuilding.isComplete() &&
+            hitBuilding.buildingType === 'bridge' &&
+            this.selectedVillagers.length > 0;
           if (hitVillager) {
             this.selectVillagerList([hitVillager]);
             SoundFX.playSelect();
-          } else if (hitBuilding && hitBuilding.isComplete()) {
+          } else if (hitBuilding && hitBuilding.isComplete() && !walkingOverBridge) {
             if (hitBuilding.buildingType === 'burial_mound') {
               this.openChronicle();
             } else {
@@ -3357,28 +3672,21 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
-    // Attack enemy camp directly if player clicks right on rival camp banner/fire
+    // Attack enemy camp in real melee/ranged combat if player orders attack on rival camp banner/fire
     const rivalCamp = this.rivalSystem.camps.find(
-      (c) => c.alive && Phaser.Math.Distance.Between(worldX, worldY, c.x, c.y) <= 105
+      (c) =>
+        c.alive &&
+        this.fogSystem.isExploredAt(c.x, c.y) &&
+        Phaser.Math.Distance.Between(worldX, worldY, c.x, c.y) <= 105
     );
     if (rivalCamp) {
       const guard = this.findNearestHostileForPlayer(rivalCamp.x, rivalCamp.y, 260);
-      if (guard) {
-        SoundFX.playOrder();
-        units.filter((u) => !u.isChild).forEach((u) => u.issueCombatOrder(guard));
-        this.spawnTargetRing(guard.x, guard.y, 0xef4444, true);
-        return;
-      }
-      // Damage unguarded rival camp!
+      const target: CombatTarget = guard ?? this.rivalSystem.getCampCombatTarget(rivalCamp);
       const adults = units.filter((u) => !u.isChild);
       if (adults.length > 0) {
         SoundFX.playOrder();
-        adults.forEach((u, i) => {
-          const a = (i / Math.max(1, adults.length)) * Math.PI * 2;
-          u.issueMoveOrder(rivalCamp.x + Math.cos(a) * 58, rivalCamp.y + Math.sin(a) * 44);
-        });
-        this.rivalSystem.damageCampNear(rivalCamp.x, rivalCamp.y, adults.length * 45);
-        this.spawnTargetRing(rivalCamp.x, rivalCamp.y, 0xef4444, true);
+        adults.forEach((u) => u.issueCombatOrder(target));
+        this.spawnTargetRing(target.x, target.y, 0xef4444, true);
         return;
       }
     }
@@ -3407,13 +3715,26 @@ export class GameScene extends Phaser.Scene {
         this.openChronicle();
         return;
       }
-      if (building.profession && building.buildingType !== 'barracks') {
+      // Walking onto a completed Bridge passes straight to movement order below
+      if (building.buildingType !== 'bridge' && building.profession && building.buildingType !== 'barracks') {
         const firstAdult = units.find((u) => !u.isChild);
         if (firstAdult) {
-          SoundFX.playOrder();
-          firstAdult.issueAssignBuilding(building);
-          this.spawnTargetRing(building.x, building.y + 4, 0x38bdf8, true);
-          this.events.emit('building-selected', building.getSnapshot());
+          if (building.buildingType === 'watchtower' && !firstAdult.warriorClass) {
+            this.showFloatingText(
+              building.x,
+              building.y - 60,
+              '🏹 На сторожову вежу можна призначити лише воїна!'
+            );
+            SoundFX.playBlocked();
+            return;
+          }
+          if (firstAdult.issueAssignBuilding(building)) {
+            this.selectVillagerList([]);
+            SoundFX.playOrder();
+            this.spawnTargetRing(building.x, building.y + 4, 0x38bdf8, true);
+            this.events.emit('building-selected', building.getSnapshot());
+            this.emitRoster();
+          }
           return;
         }
       }
@@ -3520,13 +3841,14 @@ export class GameScene extends Phaser.Scene {
 
   private findHostileAt(wx: number, wy: number, touchPad = 0): CombatTarget | null {
     for (const p of this.predators) {
-      if (p.isAlive() && p.isPointInsideClickArea(wx, wy)) return p;
+      if (p.isAlive() && p.visible && p.isPointInsideClickArea(wx, wy)) return p;
     }
     for (const u of this.rivalSystem.units) {
-      if (u.isAlive() && u.isPointInsideClickArea(wx, wy)) return u;
+      if (u.isAlive() && u.visible && u.isPointInsideClickArea(wx, wy)) return u;
     }
     if (touchPad > 0) {
-      return this.findNearestHostileForPlayer(wx, wy, 28 + touchPad);
+      const cand = this.findNearestHostileForPlayer(wx, wy, 28 + touchPad);
+      if (cand && this.fogSystem.isVisibleAt(cand.x, cand.y)) return cand;
     }
     return null;
   }
@@ -3599,12 +3921,14 @@ export class GameScene extends Phaser.Scene {
     worldY: number,
     touchPad = 0
   ): Animal | undefined {
-    const exact = this.animals.find((a) => a.isAlive() && a.isPointInsideClickArea(worldX, worldY));
+    const exact = this.animals.find(
+      (a) => a.isAlive() && a.visible && a.isPointInsideClickArea(worldX, worldY)
+    );
     if (exact || touchPad <= 0) return exact;
     let best: Animal | undefined;
     let bestDist = 28 + touchPad;
     for (const a of this.animals) {
-      if (!a.isAlive()) continue;
+      if (!a.isAlive() || !a.visible) continue;
       const d = Phaser.Math.Distance.Between(worldX, worldY, a.x, a.y - 12);
       if (d <= bestDist) {
         bestDist = d;

@@ -13,7 +13,14 @@ import {
 } from '../types/game';
 import { CURSORS } from '../utils/Cursors';
 import { SoundFX } from '../utils/SoundFX';
+import {
+  createNavAgentState,
+  NavigationAgentState,
+  resetNavAgentState,
+  stepSmartMove,
+} from '../systems/NavigationHelper';
 import type { ResourceNode } from './ResourceNode';
+import type { River } from './River';
 
 export type EnemyMode = 'GATHERER' | 'GUARD' | 'RAID' | 'CONVERTING' | 'CAPTIVE';
 
@@ -21,6 +28,7 @@ export interface EnemyUnitContext {
   worldW: number;
   worldH: number;
   getObstacles: () => ObstacleCircle[];
+  getRiver: () => River | null;
   findHostileTarget: (unit: EnemyUnit, maxRange: number) => CombatTarget | null;
   findBlockingBarricade: (x: number, y: number, range: number) => {
     x: number;
@@ -90,6 +98,7 @@ export class EnemyUnit extends Phaser.GameObjects.Container implements CombatTar
 
   // Captive walk state
   private captiveDest: { x: number; y: number; onArrived: () => void } | null = null;
+  private navState: NavigationAgentState;
 
   constructor(
     scene: Phaser.Scene,
@@ -123,6 +132,7 @@ export class EnemyUnit extends Phaser.GameObjects.Container implements CombatTar
     this.homeY = homeY;
     this.raidDest = raidDest;
     this.ctx = ctx;
+    this.navState = createNavAgentState(x, y, id.charCodeAt(id.length - 1) || 0);
 
     const wBonus = warriorClass ? WEAPON_DEFS[WARRIOR_CLASS_WEAPON[warriorClass]].bonusHp : 0;
     const aBonus = armor === 'bone_armor' ? 45 : armor === 'hide_armor' ? 20 : 0;
@@ -596,13 +606,16 @@ export class EnemyUnit extends Phaser.GameObjects.Container implements CombatTar
       ? WEAPON_DEFS[WARRIOR_CLASS_WEAPON[this.warriorClass]]
       : { damage: 7, range: 46, cooldownMs: 820, ranged: false };
 
+    const targetPad = 'buildingType' in this.target || this.target.id.startsWith('camp-') ? 38 : 0;
+    const effRange = wDef.range + targetPad;
     const dist = Phaser.Math.Distance.Between(this.x, this.y, this.target.x, this.target.y);
-    if (dist > 620) {
+    if (dist > 640) {
       this.target = null;
       return;
     }
 
-    if (dist <= wDef.range) {
+    if (dist <= effRange) {
+      resetNavAgentState(this.navState, this.x, this.y);
       this.resetAnim();
       this.rig.scaleX = this.target.x >= this.x ? 1 : -1;
       if (this.attackCooldown <= 0) {
@@ -642,30 +655,26 @@ export class EnemyUnit extends Phaser.GameObjects.Container implements CombatTar
   }
 
   private moveToward(tx: number, ty: number, dt: number, speed: number): void {
-    const dx = tx - this.x;
-    const dy = ty - this.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist < 0.01) return;
+    const res = stepSmartMove(
+      this.x,
+      this.y,
+      tx,
+      ty,
+      dt,
+      speed,
+      14,
+      8,
+      this.ctx.getObstacles(),
+      this.ctx.getRiver(),
+      this.ctx.worldW,
+      this.ctx.worldH,
+      this.navState
+    );
 
-    const step = Math.min(dist, speed * dt);
-    let nx = this.x + (dx / dist) * step;
-    let ny = this.y + (dy / dist) * step;
-
-    for (const obs of this.ctx.getObstacles()) {
-      const ox = nx - obs.x;
-      const oy = ny - obs.y;
-      const od = Math.hypot(ox, oy);
-      const minSep = obs.radius + 14;
-      if (od < minSep && od > 0.01) {
-        nx = obs.x + (ox / od) * minSep;
-        ny = obs.y + (oy / od) * minSep;
-      }
-    }
-
-    this.x = Phaser.Math.Clamp(nx, 70, this.ctx.worldW - 70);
-    this.y = Phaser.Math.Clamp(ny, 85, this.ctx.worldH - 70);
-    if (Math.abs(dx) > 0.4) {
-      this.rig.scaleX = dx >= 0 ? 1 : -1;
+    this.x = Phaser.Math.Clamp(res.x, 70, this.ctx.worldW - 70);
+    this.y = Phaser.Math.Clamp(res.y, 85, this.ctx.worldH - 70);
+    if (Math.abs(res.dx) > 0.25) {
+      this.rig.scaleX = res.dx >= 0 ? 1 : -1;
     }
 
     this.walkPhase += dt * 12;

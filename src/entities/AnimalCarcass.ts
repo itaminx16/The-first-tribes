@@ -1,19 +1,15 @@
 import Phaser from 'phaser';
-import { CARCASS_YIELD, ResourceType } from '../types/game';
+import { CARCASS_YIELD, MAMMOTH_CARCASS_YIELD, ResourceType } from '../types/game';
 import { CURSORS } from '../utils/Cursors';
 
-export type CarcassKind = 'boar' | 'deer' | 'predator';
+export type CarcassKind = 'boar' | 'deer' | 'predator' | 'mammoth';
 
 export class AnimalCarcass extends Phaser.GameObjects.Container {
   public readonly kind: CarcassKind;
   public readonly arrivalRadius = 40;
   public readonly interactRadius = 56;
 
-  private amounts: Record<'food' | 'bone' | 'hide', number> = {
-    food: CARCASS_YIELD.food,
-    bone: CARCASS_YIELD.bone,
-    hide: CARCASS_YIELD.hide
-  };
+  private amounts: Record<'food' | 'bone' | 'hide', number>;
 
   private hoverRing: Phaser.GameObjects.Ellipse;
   private sprite: Phaser.GameObjects.Image;
@@ -23,12 +19,20 @@ export class AnimalCarcass extends Phaser.GameObjects.Container {
   constructor(scene: Phaser.Scene, x: number, y: number, kind: CarcassKind) {
     super(scene, x, y);
     this.kind = kind;
+    const baseYield = kind === 'mammoth' ? MAMMOTH_CARCASS_YIELD : CARCASS_YIELD;
+    this.amounts = {
+      food: baseYield.food,
+      bone: baseYield.bone,
+      hide: baseYield.hide
+    };
 
-    this.hoverRing = scene.add.ellipse(0, 6, 78, 34, 0xffe066, 0.2);
+    this.hoverRing = scene.add.ellipse(0, 6, kind === 'mammoth' ? 106 : 78, kind === 'mammoth' ? 46 : 34, 0xffe066, 0.2);
     this.hoverRing.setStrokeStyle(2.2, 0xffe066, 0.92);
     this.hoverRing.setVisible(false);
 
-    this.sprite = scene.add.image(0, 0, `carcass-${kind}`).setScale(0.75);
+    this.sprite = scene.add
+      .image(0, 0, `carcass-${kind}`)
+      .setScale(kind === 'mammoth' ? 0.92 : 0.75);
 
     this.pillBg = scene.add.graphics();
     this.pillText = scene.add

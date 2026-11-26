@@ -5,6 +5,7 @@ import {
   BUILDING_DEFS,
   BuildingSnapshot,
   BuildingType,
+  BuildingUnlockInfo,
   CalendarState,
   ChiefStatus,
   DEFAULT_GAME_SETUP,
@@ -59,6 +60,9 @@ const BUILD_ORDER: BuildingType[] = [
   'totem',
   'palisade',
   'bridge',
+  'chief_hut',
+  'training_ground',
+  'animal_pen',
   'burial_mound',
 ];
 
@@ -167,6 +171,8 @@ export class UIScene extends Phaser.Scene {
   private barGraphics!: Phaser.GameObjects.Graphics;
   private barValuesText: Phaser.GameObjects.Text[] = [];
   private unitSkillText!: Phaser.GameObjects.Text;
+  private unitTraitText!: Phaser.GameObjects.Text;
+  private unitMoodText!: Phaser.GameObjects.Text;
   private electChiefGroup!: Phaser.GameObjects.Container;
   private electChiefBtnBg!: Phaser.GameObjects.Graphics;
   private electChiefBtnText!: Phaser.GameObjects.Text;
@@ -210,6 +216,8 @@ export class UIScene extends Phaser.Scene {
   private rosterPickBtn!: Phaser.GameObjects.Text;
   private unassignBtn!: Phaser.GameObjects.Text;
   private demolishBtn!: Phaser.GameObjects.Text;
+  private upgradeBtn!: Phaser.GameObjects.Text;
+  private chiefAlarmBtn!: Phaser.GameObjects.Text;
   private barracksGroup!: Phaser.GameObjects.Container;
   private barracksTargetText!: Phaser.GameObjects.Text;
   private totemTechBtn!: Phaser.GameObjects.Text;
@@ -218,6 +226,7 @@ export class UIScene extends Phaser.Scene {
   // Centered Modals
   private buildModalContainer!: Phaser.GameObjects.Container;
   private buildModalCards: ModalBuildCardRef[] = [];
+  private buildUnlocks: Partial<Record<BuildingType, BuildingUnlockInfo>> = {};
   private techModalContainer!: Phaser.GameObjects.Container;
   private techModalKnowledgeText!: Phaser.GameObjects.Text;
   private techCardRefs: TechCardRef[] = [];
@@ -406,6 +415,13 @@ export class UIScene extends Phaser.Scene {
       if (this.diplomacyModalContainer.visible) this.refreshDiplomacyModal();
       if (this.latestBuilding?.type === 'granary') this.refreshBuildingPanel();
     });
+    gameScene.events.on(
+      'build-unlocks-updated',
+      (unlocks: Partial<Record<BuildingType, BuildingUnlockInfo>>) => {
+        this.buildUnlocks = unlocks;
+        if (this.buildModalContainer.visible) this.refreshBuildModal();
+      }
+    );
     gameScene.events.on(
       'selection-updated',
       (payload: { single: VillagerSnapshot | null; summary: SelectionSummary }) => {
@@ -1256,7 +1272,21 @@ export class UIScene extends Phaser.Scene {
       .setInteractive();
     unitBlocker.on('pointerdown', () => this.events.emit('ui-button-clicked'));
 
-    this.unitPortrait = this.add.image(44, 72, 'portrait-male-1').setScale(0.52);
+    this.unitPortrait = this.add.image(44, 62, 'portrait-male-1').setScale(0.5);
+    this.unitTraitText = this.add
+      .text(44, 114, '', {
+        fontSize: '9.5px',
+        fontStyle: 'bold',
+        color: '#fde68a',
+      })
+      .setOrigin(0.5, 0);
+    this.unitMoodText = this.add
+      .text(44, 130, '', {
+        fontSize: '10.5px',
+        fontStyle: 'bold',
+        color: '#86efac',
+      })
+      .setOrigin(0.5, 0);
     this.unitNameText = this.add.text(88, 10, '', {
       fontSize: '14.5px',
       fontStyle: 'bold',
@@ -1352,6 +1382,8 @@ export class UIScene extends Phaser.Scene {
       this.unitPanelBg,
       unitBlocker,
       this.unitPortrait,
+      this.unitTraitText,
+      this.unitMoodText,
       this.unitNameText,
       this.unitGenderBadge,
       deselectBtn,
@@ -1679,7 +1711,7 @@ export class UIScene extends Phaser.Scene {
 
   private createBuildModal(): void {
     const w = 756;
-    const h = 456;
+    const h = 492;
     this.buildModalContainer = this.add.container(0, 0).setDepth(4800);
 
     const scrim = this.add.rectangle(0, 0, 3200, 3200, 0x0a0704, 0.68).setInteractive();
@@ -1691,14 +1723,14 @@ export class UIScene extends Phaser.Scene {
     bg.lineStyle(2.4, 0xd99b52, 0.96);
     bg.strokeRoundedRect(-w / 2, -h / 2, w, h, 18);
 
-    const title = this.add.text(-w / 2 + 22, -h / 2 + 14, '🏗️ Вікно будівництва племені (14 споруд)', {
+    const title = this.add.text(-w / 2 + 22, -h / 2 + 12, '🏗️ Вікно будівництва племені (17 споруд)', {
       fontSize: '18px',
       fontStyle: 'bold',
       color: '#ffe066',
     });
 
     const closeBtn = this.add
-      .text(w / 2 - 20, -h / 2 + 14, '✕ Закрити', {
+      .text(w / 2 - 20, -h / 2 + 12, '✕ Закрити', {
         fontSize: '13px',
         fontStyle: 'bold',
         color: '#fca5a5',
@@ -1715,11 +1747,11 @@ export class UIScene extends Phaser.Scene {
     this.buildModalContainer.add([scrim, bg, title, closeBtn]);
 
     const cardW = 232;
-    const cardH = 68;
+    const cardH = 64;
     const gapX = 10;
-    const gapY = 7;
+    const gapY = 6;
     const startX = -w / 2 + 20;
-    const startY = -h / 2 + 50;
+    const startY = -h / 2 + 46;
 
     BUILD_ORDER.forEach((type, idx) => {
       const def = BUILDING_DEFS[type];
@@ -1773,6 +1805,11 @@ export class UIScene extends Phaser.Scene {
       hit.on('pointerdown', () => {
         SoundFX.unlock();
         this.events.emit('ui-button-clicked');
+        const unlockInfo = this.buildUnlocks[type];
+        if (unlockInfo && !unlockInfo.unlocked) {
+          this.events.emit('toggle-build', type);
+          return;
+        }
         this.buildModalContainer.setVisible(false);
         this.events.emit('toggle-build', type);
       });
@@ -1787,21 +1824,40 @@ export class UIScene extends Phaser.Scene {
 
   private refreshBuildModal(): void {
     const cardW = 232;
-    const cardH = 68;
+    const cardH = 64;
     for (const ref of this.buildModalCards) {
       const def = BUILDING_DEFS[ref.type];
+      const unlockInfo = this.buildUnlocks[ref.type];
+      const unlocked = !unlockInfo || unlockInfo.unlocked;
       const ok =
+        unlocked &&
         this.latestResources.wood >= def.wood &&
         this.latestResources.stone >= def.stone &&
         this.latestResources.bone >= (def.bone ?? 0) &&
         this.latestResources.hide >= (def.hide ?? 0);
+
+      const costs: string[] = [`🪵${def.wood}`, `🪨${def.stone}`];
+      if (def.bone) costs.push(`🦴${def.bone}`);
+      if (def.hide) costs.push(`🧥${def.hide}`);
+
       ref.bg.clear();
-      ref.bg.fillStyle(ref.hovered ? 0x3b281a : 0x18100a, 0.94);
-      ref.bg.fillRoundedRect(0, 0, cardW, cardH, 10);
-      ref.bg.lineStyle(1.6, ok ? (ref.hovered ? 0x4ade80 : 0xd99b52) : 0x7f1d1d, 0.92);
-      ref.bg.strokeRoundedRect(0, 0, cardW, cardH, 10);
-      ref.titleText.setColor(ok ? '#ffe066' : '#cbd5e1');
-      ref.costText.setColor(ok ? '#86efac' : '#fca5a5');
+      if (!unlocked) {
+        ref.bg.fillStyle(0x110b07, 0.92);
+        ref.bg.fillRoundedRect(0, 0, cardW, cardH, 10);
+        ref.bg.lineStyle(1.4, 0x475569, 0.78);
+        ref.bg.strokeRoundedRect(0, 0, cardW, cardH, 10);
+        ref.titleText.setText(`🔒 ${def.nameUk}`).setColor('#94a3b8');
+        ref.costText
+          .setText(unlockInfo?.reasonUk ?? `Етап ${unlockInfo?.stage ?? 2}`)
+          .setColor('#fbbf24');
+      } else {
+        ref.bg.fillStyle(ref.hovered ? 0x3b281a : 0x18100a, 0.94);
+        ref.bg.fillRoundedRect(0, 0, cardW, cardH, 10);
+        ref.bg.lineStyle(1.6, ok ? (ref.hovered ? 0x4ade80 : 0xd99b52) : 0x7f1d1d, 0.92);
+        ref.bg.strokeRoundedRect(0, 0, cardW, cardH, 10);
+        ref.titleText.setText(def.nameUk).setColor(ok ? '#ffe066' : '#cbd5e1');
+        ref.costText.setText(costs.join(' ')).setColor(ok ? '#86efac' : '#fca5a5');
+      }
     }
   }
 
@@ -2104,6 +2160,41 @@ export class UIScene extends Phaser.Scene {
     });
     this.unassignBtn.setVisible(false);
 
+    this.upgradeBtn = this.add
+      .text(14, 150, '⬆️ Покращити', {
+        fontSize: '10.5px',
+        fontStyle: 'bold',
+        color: '#fef08a',
+        backgroundColor: '#14532d',
+        padding: { x: 8, y: 4 },
+      })
+      .setOrigin(0, 0.5)
+      .setInteractive({ useHandCursor: true });
+    this.upgradeBtn.on('pointerdown', () => {
+      if (!this.latestBuilding) return;
+      SoundFX.unlock();
+      this.events.emit('ui-button-clicked');
+      this.events.emit('upgrade-building', this.latestBuilding.id);
+    });
+    this.upgradeBtn.setVisible(false);
+
+    this.chiefAlarmBtn = this.add
+      .text(this.buildingPanelW - 14, 150, '🚨 Тривога', {
+        fontSize: '10.5px',
+        fontStyle: 'bold',
+        color: '#fecaca',
+        backgroundColor: '#7f1d1d',
+        padding: { x: 8, y: 4 },
+      })
+      .setOrigin(1, 0.5)
+      .setInteractive({ useHandCursor: true });
+    this.chiefAlarmBtn.on('pointerdown', () => {
+      SoundFX.unlock();
+      this.events.emit('ui-button-clicked');
+      this.events.emit('toggle-defense-alarm');
+    });
+    this.chiefAlarmBtn.setVisible(false);
+
     // Barracks warrior controls (target warrior count ➖ / ➕ + 3 warrior classes)
     this.barracksGroup = this.add.container(0, 0);
     const minusBtn = this.add
@@ -2218,6 +2309,8 @@ export class UIScene extends Phaser.Scene {
       this.assignBtnGroup,
       this.rosterPickBtn,
       this.unassignBtn,
+      this.upgradeBtn,
+      this.chiefAlarmBtn,
       this.barracksGroup,
       this.totemTechBtn,
       this.burialChronicleBtn,
@@ -2240,11 +2333,29 @@ export class UIScene extends Phaser.Scene {
       return;
     }
     const b = this.latestBuilding;
-    this.buildingTitleText.setText(b.nameUk);
+    this.buildingTitleText.setText(
+      b.level && b.level > 1 && !b.nameUk.includes('Рів.')
+        ? `${b.nameUk} (Рів.${b.level})`
+        : b.nameUk
+    );
     this.buildingDescText.setText(b.descUk);
     this.totemTechBtn.setVisible(b.type === 'totem');
     this.burialChronicleBtn.setVisible(b.type === 'burial_mound');
     this.demolishBtn.setVisible(Boolean(b.canDemolish));
+    this.chiefAlarmBtn.setVisible(b.type === 'chief_hut');
+
+    if (b.upgradeCost) {
+      const uc = b.upgradeCost;
+      const parts = [`🪵${uc.wood}`, `🪨${uc.stone}`];
+      if (uc.bone) parts.push(`🦴${uc.bone}`);
+      if (uc.hide) parts.push(`🧥${uc.hide}`);
+      this.upgradeBtn
+        .setText(`⬆️ Рів.${(b.level ?? 1) + 1}: ${parts.join(' ')}`)
+        .setPosition(14, b.type === 'barracks' ? 114 : 150)
+        .setVisible(true);
+    } else {
+      this.upgradeBtn.setVisible(false);
+    }
 
     if (b.type === 'barracks') {
       this.buildingStatusText.setText(
@@ -3167,7 +3278,7 @@ export class UIScene extends Phaser.Scene {
       mw: number;
       mh: number;
     }> = [
-      { c: this.buildModalContainer, mw: 756, mh: 478 },
+      { c: this.buildModalContainer, mw: 756, mh: 492 },
       { c: this.techModalContainer, mw: 680, mh: 448 },
       { c: this.chronicleContainer, mw: 560, mh: 400 },
       { c: this.diplomacyModalContainer, mw: 700, mh: 452 },
@@ -3396,6 +3507,11 @@ export class UIScene extends Phaser.Scene {
     if (snap.hasWisdomBuff) statusTags.push('✨+20%');
     this.unitCarryText.setText(statusTags.join(' '));
 
+    const moodVal = Math.round(snap.stats.mood ?? 80);
+    const moodEmoji = moodVal >= 70 ? '😊' : moodVal >= 35 ? '😐' : '😒';
+    const moodColor = moodVal >= 70 ? '#86efac' : moodVal >= 35 ? '#fde047' : '#fca5a5';
+    this.unitTraitText.setText(snap.traitLabel ?? '');
+    this.unitMoodText.setText(`${moodEmoji} ${moodVal}%`).setColor(moodColor);
     this.unitFamilyText.setText(`🏠 ${snap.familyName}`);
     if (snap.isChild) {
       this.unitToolStatusText.setText('🌱 Дитина').setColor('#86efac');

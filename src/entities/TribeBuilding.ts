@@ -5,6 +5,9 @@ import {
   BuildingType,
   CombatTarget,
   Gender,
+  getBuildingUpgradeCost,
+  GRANARY_STORAGE_BONUS,
+  MAX_BUILDING_LEVEL,
   PROFESSION_LABELS_UK,
   ProfessionId,
   SEASON_DURATION_MS,
@@ -37,7 +40,8 @@ export class TribeBuilding extends Phaser.GameObjects.Container implements Comba
   public readonly maxWorkers: number;
 
   public hp: number;
-  public readonly maxHp: number;
+  public maxHp: number;
+  public level = 1;
   public bridgeAngle = 0;
   public statusNote = '';
   public targetWarriors = 5;
@@ -47,12 +51,16 @@ export class TribeBuilding extends Phaser.GameObjects.Container implements Comba
   private season: Season = 'SPRING';
   private assignedWorkers: Villager[] = [];
   private childrenInside = new Set<Villager>();
+  private trainees = new Set<Villager>();
+  private readonly maxTrainees = 3;
   private captives: TotemCaptive[] = [];
   private ambientTimer = 1400;
   private towerShootTimer = 900;
 
   private hoverRing: Phaser.GameObjects.Ellipse;
+  private levelTrim: Phaser.GameObjects.Graphics;
   private sprite: Phaser.GameObjects.Image;
+  private levelBadge: Phaser.GameObjects.Text;
   private workerBadgeBg: Phaser.GameObjects.Graphics;
   private workerBadgeText: Phaser.GameObjects.Text;
   private progressBg: Phaser.GameObjects.Graphics;
@@ -119,8 +127,22 @@ export class TribeBuilding extends Phaser.GameObjects.Container implements Comba
     this.getToolSummary = options?.getToolSummary;
     this.getBridgeBankSpot = options?.getBridgeBankSpot;
 
-    const ringW = type === 'palisade' ? 92 : type === 'bridge' ? 148 : 132;
-    const ringH = type === 'palisade' ? 42 : type === 'bridge' ? 74 : 58;
+    const ringW =
+      type === 'palisade'
+        ? 92
+        : type === 'bridge'
+          ? 148
+          : type === 'training_ground'
+            ? 172
+            : 132;
+    const ringH =
+      type === 'palisade'
+        ? 42
+        : type === 'bridge'
+          ? 74
+          : type === 'training_ground'
+            ? 70
+            : 58;
     this.hoverRing = scene.add.ellipse(0, type === 'bridge' ? 0 : 4, ringW, ringH, 0xffe066, 0.16);
     this.hoverRing.setStrokeStyle(2.5, 0xffe066, 0.9);
     this.hoverRing.setVisible(false);
@@ -128,11 +150,22 @@ export class TribeBuilding extends Phaser.GameObjects.Container implements Comba
       this.hoverRing.setRotation(this.bridgeAngle);
     }
 
+    this.levelTrim = scene.add.graphics();
     this.sprite = scene.add.image(0, 0, `building-${type}-0`);
     this.sprite.setOrigin(0.5, type === 'bridge' ? 0.52 : 0.825);
     if (type === 'bridge') {
       this.sprite.setRotation(this.bridgeAngle);
     }
+    this.levelBadge = scene.add
+      .text(0, type === 'watchtower' ? -112 : -88, '', {
+        fontSize: '11px',
+        fontStyle: 'bold',
+        color: '#facc15',
+        backgroundColor: '#261a11cc',
+        padding: { x: 4, y: 1 },
+      })
+      .setOrigin(0.5)
+      .setVisible(false);
 
     this.workerBadgeBg = scene.add.graphics();
     this.workerBadgeBg.setVisible(false);
@@ -150,7 +183,9 @@ export class TribeBuilding extends Phaser.GameObjects.Container implements Comba
 
     this.add([
       this.hoverRing,
+      this.levelTrim,
       this.sprite,
+      this.levelBadge,
       this.workerBadgeBg,
       this.workerBadgeText,
       this.progressBg,
@@ -182,6 +217,55 @@ export class TribeBuilding extends Phaser.GameObjects.Container implements Comba
 
   public isAlive(): boolean {
     return Boolean(this.scene) && this.hp > 0;
+  }
+
+  public getLevel(): number {
+    return this.level;
+  }
+
+  public getGranaryBonus(): number {
+    return this.buildingType === 'granary' ? this.level * GRANARY_STORAGE_BONUS : 0;
+  }
+
+  public setLevel(lvl: number): void {
+    const next = Phaser.Math.Clamp(lvl, 1, MAX_BUILDING_LEVEL);
+    const delta = next - this.level;
+    this.level = next;
+    if (delta > 0) {
+      const hpStep = this.buildingType === 'watchtower' ? 170 : 120;
+      this.maxHp += delta * hpStep;
+      this.hp = Math.min(this.maxHp, this.hp + delta * hpStep);
+    }
+    this.applyLevelVisuals();
+  }
+
+  public upgrade(): boolean {
+    if (!this.isComplete() || this.level >= MAX_BUILDING_LEVEL) return false;
+    this.setLevel(this.level + 1);
+    this.playBounce();
+    this.spawnBuildChips();
+    return true;
+  }
+
+  private applyLevelVisuals(): void {
+    const scale = 1 + (this.level - 1) * 0.07;
+    this.sprite.setScale(scale);
+    this.levelTrim.clear();
+    if (this.level >= 2) {
+      const col = this.level >= 3 ? 0xfacc15 : 0x94a3b8;
+      this.levelTrim.lineStyle(3, col, 0.92);
+      this.levelTrim.strokeEllipse(0, 2, 108, 38);
+      if (this.buildingType === 'watchtower') {
+        // Fire brazier ring atop upgraded Watchtower
+        this.levelTrim.fillStyle(0xf97316, 0.9);
+        this.levelTrim.fillCircle(0, -102, this.level >= 3 ? 8 : 6);
+        this.levelTrim.fillStyle(0xfef08a, 0.95);
+        this.levelTrim.fillCircle(0, -103, this.level >= 3 ? 4.5 : 3);
+      }
+      this.levelBadge.setText('★'.repeat(this.level)).setVisible(true);
+    } else {
+      this.levelBadge.setVisible(false);
+    }
   }
 
   public getProgress(): number {
@@ -384,6 +468,49 @@ export class TribeBuilding extends Phaser.GameObjects.Container implements Comba
     this.refreshBadge();
   }
 
+  public getTrainees(): Villager[] {
+    for (const t of [...this.trainees]) {
+      if (!t.scene || t.isDying) {
+        this.trainees.delete(t);
+      }
+    }
+    return [...this.trainees];
+  }
+
+  public canAcceptTrainee(): boolean {
+    return (
+      this.buildingType === 'training_ground' &&
+      this.isComplete() &&
+      this.getTrainees().length < this.maxTrainees
+    );
+  }
+
+  public enterTraining(v: Villager): boolean {
+    if (this.trainees.has(v)) return true;
+    if (!this.canAcceptTrainee()) return false;
+    this.trainees.add(v);
+    this.refreshBadge();
+    return true;
+  }
+
+  public leaveTraining(v: Villager): void {
+    if (this.trainees.delete(v)) {
+      this.refreshBadge();
+    }
+  }
+
+  public getTrainSpotFor(v: Villager): { x: number; y: number } {
+    const list = this.getTrainees();
+    const idx = Math.max(0, list.indexOf(v));
+    const offsets = [
+      { dx: -44, dy: 34 },
+      { dx: 0, dy: 44 },
+      { dx: 44, dy: 34 },
+    ];
+    const off = offsets[idx % offsets.length];
+    return { x: this.x + off.dx, y: this.y + off.dy };
+  }
+
   public getChildrenNames(): string[] {
     for (const c of [...this.childrenInside]) {
       if (!c.scene || !c.isChild) {
@@ -447,11 +574,20 @@ export class TribeBuilding extends Phaser.GameObjects.Container implements Comba
           ? '⚔️'
           : this.buildingType === 'gatherer_hut'
           ? '🧺'
-          : '🛠️';
+          : this.buildingType === 'training_ground'
+            ? '🏋️'
+            : this.buildingType === 'animal_pen'
+              ? '🐗'
+              : '🛠️';
       if (this.maxWorkers > 1) {
         label = `${icon} ${workers.map((w) => w.villagerName).join(', ')} (${workers.length}/${this.maxWorkers})`;
       } else {
         label = `${icon} ${workers[0].villagerName}`;
+      }
+    } else if (this.buildingType === 'training_ground' && this.isComplete()) {
+      const tCount = this.getTrainees().length;
+      if (tCount > 0) {
+        label = `🏋️ Тренуються: ${tCount}/3`;
       }
     } else if (this.buildingType === 'nursery' && this.childrenInside.size > 0) {
       label = `👶 Дітей: ${this.childrenInside.size}`;
@@ -485,6 +621,34 @@ export class TribeBuilding extends Phaser.GameObjects.Container implements Comba
     const slots = this.getWarriorSlots?.();
     const tools = this.buildingType === 'workshop' ? this.getToolSummary?.() : undefined;
 
+    const upgradeCost = this.isComplete()
+      ? getBuildingUpgradeCost(this.buildingType, this.level)
+      : null;
+    const upgradeDescUk =
+      upgradeCost === null
+        ? undefined
+        : this.buildingType === 'watchtower'
+          ? `Рів.${this.level + 1}: вогняні стріли (+${this.level * 8} урону, +45 дальності й огляду)`
+          : this.buildingType === 'granary'
+            ? `Рів.${this.level + 1}: +${GRANARY_STORAGE_BONUS} місткості складу й +120 HP`
+            : `Рів.${this.level + 1}: зміцнення споруди (+120 HP та посилений ефект)`;
+
+    let computedStatus = this.statusNote || undefined;
+    if (!computedStatus && this.isComplete()) {
+      if (this.buildingType === 'chief_hut') {
+        const pct = 15 + this.level * 5;
+        computedStatus = `👑 Аура Вождя Рів.${this.level}: +${pct}% швидкості й сили поруч`;
+      } else if (this.buildingType === 'animal_pen' && first) {
+        computedStatus = `🐗 Приручені звірі (+4 🍖, +2 🧥 за цикл)`;
+      } else if (this.buildingType === 'training_ground') {
+        const trainees = this.getTrainees();
+        computedStatus =
+          trainees.length > 0
+            ? `🏋️ Зараз тренуються (${trainees.length}/3): ${trainees.map((t) => t.villagerName).join(', ')}`
+            : `🏋️ Вільні жителі самі приходять у вільний час (до 3 осіб, 1 раз/сезон)`;
+      }
+    }
+
     return {
       id: this.buildingId,
       type: this.buildingType,
@@ -503,7 +667,7 @@ export class TribeBuilding extends Phaser.GameObjects.Container implements Comba
         level: prof ? w.getSkillLevel(prof) : 1,
       })),
       maxWorkers: this.maxWorkers,
-      statusNote: this.statusNote || undefined,
+      statusNote: computedStatus,
       warriorSlotsUsed: slots?.used,
       warriorSlotsMax: slots?.max ?? this.targetWarriors,
       targetWarriors: this.buildingType === 'barracks' ? this.targetWarriors : undefined,
@@ -518,6 +682,10 @@ export class TribeBuilding extends Phaser.GameObjects.Container implements Comba
       garrisonedWarriorName:
         this.buildingType === 'watchtower' ? (first?.villagerName ?? null) : undefined,
       requiresWarrior: this.buildingType === 'watchtower',
+      level: this.level,
+      maxLevel: MAX_BUILDING_LEVEL,
+      upgradeCost,
+      upgradeDescUk,
     };
   }
 
@@ -612,15 +780,21 @@ export class TribeBuilding extends Phaser.GameObjects.Container implements Comba
         const fireDelay = Math.max(560, 920 - (wLvl - 1) * 65);
         if (this.towerShootTimer <= 0) {
           this.towerShootTimer = fireDelay;
-          const target = this.findTowerTarget(this.x, this.y, 365);
+          const towerRange = 365 + (this.level - 1) * 45;
+          const target = this.findTowerTarget(this.x, this.y, towerRange);
           if (target && target.isAlive()) {
             guard.faceWorldPoint(target.x, target.y);
             const techTier = this.getWeaponTechTier?.() ?? 0;
             const mult = [1, 1.2, 1.45, 1.75][techTier] ?? 1;
-            const dmg = Math.round((20 + (wLvl - 1) * 3) * mult);
+            const fireBonus = (this.level - 1) * 8;
+            const dmg = Math.round((20 + (wLvl - 1) * 3 + fireBonus) * mult);
             SoundFX.playBowShot();
             const startY = this.y - 98;
             const arrow = this.scene.add.image(this.x, startY, 'projectile-arrow');
+            if (this.level >= 2) {
+              arrow.setTint(0xff7b00);
+              arrow.setScale(1.15);
+            }
             arrow.setDepth(Math.max(this.y, target.y) + 80);
             arrow.setRotation(
               Phaser.Math.Angle.Between(this.x, startY, target.x, target.y - 16)

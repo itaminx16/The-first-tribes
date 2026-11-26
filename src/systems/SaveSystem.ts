@@ -28,6 +28,7 @@ export interface SavedHut {
   y: number;
   isLarge: boolean;
   progress: number;
+  level?: number;
 }
 
 export interface SavedBuilding {
@@ -39,6 +40,7 @@ export interface SavedBuilding {
   hp: number;
   targetWarriors: number;
   angle?: number;
+  level?: number;
 }
 
 export interface SavedVillager {

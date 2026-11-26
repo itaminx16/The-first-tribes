@@ -122,16 +122,16 @@ const BUILD_SEQUENCE: Array<{
   stone: number;
   popBonus: number;
 }> = [
-  { type: 'hut', wood: 20, stone: 10, popBonus: 4 },
-  { type: 'gatherer_hut', wood: 25, stone: 10, popBonus: 0 },
-  { type: 'hut', wood: 20, stone: 10, popBonus: 4 },
-  { type: 'granary', wood: 35, stone: 20, popBonus: 0 },
-  { type: 'barracks', wood: 40, stone: 30, popBonus: 0 },
-  { type: 'large_hut', wood: 45, stone: 25, popBonus: 8 },
-  { type: 'workshop', wood: 30, stone: 20, popBonus: 0 },
-  { type: 'watchtower', wood: 35, stone: 25, popBonus: 0 },
-  { type: 'large_hut', wood: 45, stone: 25, popBonus: 8 },
-  { type: 'large_hut', wood: 45, stone: 25, popBonus: 8 },
+  { type: 'hut', wood: 12, stone: 6, popBonus: 4 },
+  { type: 'gatherer_hut', wood: 15, stone: 8, popBonus: 0 },
+  { type: 'granary', wood: 18, stone: 10, popBonus: 0 },
+  { type: 'animal_pen', wood: 20, stone: 10, popBonus: 0 },
+  { type: 'barracks', wood: 26, stone: 16, popBonus: 0 },
+  { type: 'training_ground', wood: 18, stone: 12, popBonus: 0 },
+  { type: 'large_hut', wood: 32, stone: 16, popBonus: 8 },
+  { type: 'watchtower', wood: 24, stone: 14, popBonus: 0 },
+  { type: 'chief_hut', wood: 24, stone: 14, popBonus: 0 },
+  { type: 'large_hut', wood: 32, stone: 16, popBonus: 8 },
 ];
 
 export class RivalTribeSystem {
@@ -215,7 +215,7 @@ export class RivalTribeSystem {
         hide: new StorageZone(scene, spots.hide.x, spots.hide.y, 'hide', RESOURCE_LABELS_UK.hide),
       };
 
-      // Each rival tribe starts fairly like the player: 1 Woman + 2 Men, modest starting food/wood/stone, 1 Hut
+      // Each rival tribe starts fairly like the player: 2 Women + 2 Men, fair starting resources, 1 Hut
       const camp: RivalCampState = {
         id: def.id,
         nameUk: def.nameUk,
@@ -223,17 +223,17 @@ export class RivalTribeSystem {
         colorHex: def.colorHex,
         x: cx,
         y: cy,
-        population: 3,
-        popCap: 4,
+        population: 4,
+        popCap: 5,
         resources: {
-          wood: 14,
-          stone: 10,
-          food: 16,
-          bone: 0,
-          hide: 0,
+          wood: 24,
+          stone: 14,
+          food: 22,
+          bone: 2,
+          hide: 2,
         },
-        hp: 340,
-        maxHp: 340,
+        hp: 360,
+        maxHp: 360,
         alive: true,
         discovered: false,
         treaty: 'none',
@@ -242,9 +242,9 @@ export class RivalTribeSystem {
         interTribeStatusUk: 'Розвиває поселення',
         hasBarracks: false,
         barracksCount: 0,
-        breedingTimerMs: 30_000,
+        breedingTimerMs: 12_000,
         isBreedingNow: false,
-        buildCheckTimerMs: 5500,
+        buildCheckTimerMs: 3000,
         banner,
         label,
         buildings: [],
@@ -262,9 +262,10 @@ export class RivalTribeSystem {
       this.updateCampLabel(camp);
       this.camps.push(camp);
 
-      // Spawn the initial 1 female + 2 males as real gatherers
+      // Spawn the initial 2 females + 2 males as real gatherers
       this.spawnTribeGatherer(camp, 'female');
       this.spawnTribeGatherer(camp, 'male');
+      this.spawnTribeGatherer(camp, 'female');
       this.spawnTribeGatherer(camp, 'male');
     });
   }
@@ -367,9 +368,42 @@ export class RivalTribeSystem {
         findBlockingBarricade: this.ctx.findBlockingBarricade,
         findResourceForGatherer: (seeker) =>
           this.findNearestResourceForCamp(camp, seeker),
+        getDropPoint: (_u, rType) => {
+          const granary = camp.buildings.find((b) => b.type === 'granary');
+          if (granary) return { x: granary.x, y: granary.y + 62 };
+          return camp.storages[rType]?.getDropPoint() ?? { x: camp.x, y: camp.y + 58 };
+        },
+        getVillageActivitySpot: (u) => {
+          const interesting = camp.buildings.filter(
+            (b) =>
+              b.type === 'training_ground' ||
+              b.type === 'animal_pen' ||
+              b.type === 'hut' ||
+              b.type === 'large_hut' ||
+              b.type === 'chief_hut'
+          );
+          if (interesting.length > 0 && Math.random() < 0.75) {
+            const pick = interesting[(u.id.charCodeAt(u.id.length - 1) + Math.floor(Math.random() * 5)) % interesting.length];
+            const icon =
+              pick.type === 'training_ground'
+                ? '💪'
+                : pick.type === 'animal_pen'
+                  ? '🐗'
+                  : pick.type === 'chief_hut'
+                    ? '👑'
+                    : '🏠';
+            return { x: pick.x + Phaser.Math.Between(-28, 28), y: pick.y + 62, icon };
+          }
+          const ang = Phaser.Math.FloatBetween(0, Math.PI * 2);
+          return {
+            x: camp.x + Math.cos(ang) * 86,
+            y: camp.y + Math.sin(ang) * 68,
+            icon: Phaser.Math.RND.pick(['🌸', '🔥', '💬']),
+          };
+        },
         onDeliverResource: (_u, rType, amount) => {
-          camp.resources[rType] += amount;
-          if (rType === 'food' && Math.random() < 0.45) {
+          camp.resources[rType] += Math.max(amount, 7);
+          if (rType === 'food') {
             camp.resources.bone += 1;
             camp.resources.hide += 1;
           }
@@ -399,14 +433,15 @@ export class RivalTribeSystem {
     const nodes = this.ctx.getResourceNodes();
     if (nodes.length === 0) return null;
 
-    // Prioritize whatever resource the camp has least of
-    let preferred: ResourceType = 'wood';
-    if (
-      camp.resources.food <= camp.resources.wood &&
-      camp.resources.food <= camp.resources.stone
-    ) {
+    // Spread gatherers across wood, stone, and food based on both camp need and unit role seed
+    const roleIdx = seeker.id.charCodeAt(seeker.id.length - 1) % 3;
+    const roleTypes: ResourceType[] = ['wood', 'food', 'stone'];
+    let preferred: ResourceType = roleTypes[roleIdx];
+    if (camp.resources.food < 16) {
       preferred = 'food';
-    } else if (camp.resources.stone < camp.resources.wood * 0.65) {
+    } else if (camp.resources.wood < 14) {
+      preferred = 'wood';
+    } else if (camp.resources.stone < 10) {
       preferred = 'stone';
     }
 
@@ -416,9 +451,10 @@ export class RivalTribeSystem {
     for (const n of nodes) {
       if (n.depleted || !n.active || n.isSapling) continue;
       const d = Phaser.Math.Distance.Between(camp.x, camp.y, n.x, n.y);
-      if (d > 1450) continue;
-      const typePenalty = n.resourceType === preferred ? 0.65 : 1.15;
-      const score = (d + Phaser.Math.Distance.Between(seeker.x, seeker.y, n.x, n.y) * 0.35) * typePenalty;
+      if (d > 1750) continue;
+      const typePenalty = n.resourceType === preferred ? 0.58 : 1.15;
+      const jitter = 0.88 + ((seeker.id.charCodeAt(seeker.id.length - 1) * 17 + Math.round(n.x)) % 24) * 0.01;
+      const score = (d + Phaser.Math.Distance.Between(seeker.x, seeker.y, n.x, n.y) * 0.35) * typePenalty * jitter;
       if (score < bestScore) {
         bestScore = score;
         best = n;
@@ -440,9 +476,9 @@ export class RivalTribeSystem {
     const out: ObstacleCircle[] = [];
     for (const c of this.camps) {
       if (!c.alive) continue;
-      out.push({ x: c.x, y: c.y, radius: 52, owner: c });
+      out.push({ x: c.x, y: c.y, radius: 44, owner: c, softBypassable: true });
       for (const b of c.buildings) {
-        out.push({ x: b.x, y: b.y, radius: 40, owner: b.sprite });
+        out.push({ x: b.x, y: b.y, radius: 34, owner: b.sprite, softBypassable: true });
       }
     }
     return out;
@@ -611,10 +647,26 @@ export class RivalTribeSystem {
         primaryHut.setAngle(0);
       }
 
-      // A. Construction AI
+      // A. Construction AI & Built-Structure Economy
       camp.buildCheckTimerMs -= delta;
       if (camp.buildCheckTimerMs <= 0) {
-        camp.buildCheckTimerMs = 4500;
+        camp.buildCheckTimerMs = 3600;
+        for (const b of camp.buildings) {
+          if (b.type === 'gatherer_hut') {
+            camp.resources.wood += 2;
+            camp.resources.stone += 1;
+            camp.resources.food += 2;
+          } else if (b.type === 'animal_pen') {
+            camp.resources.food += 3;
+            camp.resources.hide += 2;
+            camp.resources.bone += 1;
+          } else if (b.type === 'workshop') {
+            camp.resources.wood += 1;
+            camp.resources.stone += 1;
+          }
+        }
+        this.syncCampStorages(camp);
+
         const nextIdx = camp.buildings.length - 1; // index 0 was starting hut
         if (nextIdx >= 0 && nextIdx < BUILD_SEQUENCE.length) {
           const plan = BUILD_SEQUENCE[nextIdx];
@@ -626,7 +678,7 @@ export class RivalTribeSystem {
             camp.resources.stone -= plan.stone;
             this.syncCampStorages(camp);
             this.placeCampBuilding(camp, plan.type, plan.popBonus);
-            camp.interTribeStatusUk = `Збудували: ${plan.type === 'large_hut' ? 'Велику хатину' : plan.type === 'barracks' ? 'Казарму' : 'нову споруду'}`;
+            camp.interTribeStatusUk = `Збудували: ${plan.type === 'large_hut' ? 'Велику хатину' : plan.type === 'barracks' ? 'Казарму' : plan.type === 'animal_pen' ? 'Загін звірів' : plan.type === 'training_ground' ? 'Спортзал' : 'нову споруду'}`;
           }
         }
         // Also arm gatherers into guards if Barracks is built and resources allow
@@ -634,19 +686,19 @@ export class RivalTribeSystem {
         this.updateCampLabel(camp);
       }
 
-      // B. Natural Population Growth & Child Raising (requires 1 male + 1 female, food >= 14, pop < popCap)
+      // B. Natural Population Growth & Child Raising (requires 1 male + 1 female, food >= 12, pop < popCap)
       camp.breedingTimerMs -= delta;
       if (camp.breedingTimerMs <= 0 && !camp.isBreedingNow) {
-        camp.breedingTimerMs = 34_000;
+        camp.breedingTimerMs = 13_000;
         const hasFemale = campUnits.some((u) => u.gender === 'female');
         const hasMale = campUnits.some((u) => u.gender === 'male');
         if (
           hasFemale &&
           hasMale &&
           camp.population < camp.popCap &&
-          camp.resources.food >= 14
+          camp.resources.food >= 12
         ) {
-          camp.resources.food -= 10;
+          camp.resources.food -= 8;
           this.syncCampStorages(camp);
           camp.isBreedingNow = true;
 
@@ -665,7 +717,7 @@ export class RivalTribeSystem {
             });
           }
 
-          this.scene.time.delayedCall(9000, () => {
+          this.scene.time.delayedCall(5000, () => {
             if (!camp.alive) return;
             camp.isBreedingNow = false;
             const newGender: Gender = Math.random() < 0.5 ? 'female' : 'male';
@@ -718,10 +770,10 @@ export class RivalTribeSystem {
     );
     if (guards.length >= naturalMaxWarriors) return;
 
-    if (camp.resources.wood >= 8 && camp.resources.stone >= 4 && camp.resources.bone >= 2) {
-      camp.resources.wood -= 8;
-      camp.resources.stone -= 4;
-      camp.resources.bone -= 2;
+    if (camp.resources.wood >= 6 && camp.resources.stone >= 3) {
+      camp.resources.wood -= 6;
+      camp.resources.stone -= 3;
+      if (camp.resources.bone >= 1) camp.resources.bone -= 1;
       const recruit = gatherers[gatherers.length - 1];
       const classes: WarriorClass[] = ['spearman', 'archer', 'clubman'];
       const wClass = classes[guards.length % classes.length];
@@ -1012,8 +1064,9 @@ export class RivalTribeSystem {
         (u.mode === 'GUARD' || u.mode === 'RAID')
     ).length;
     const warInfo = warriors > 0 ? ` • ⚔️${warriors}` : '';
+    const bldInfo = camp.buildings.length > 0 ? ` • 🏛️${camp.buildings.length}` : '';
     camp.label.setText(
-      `${treatyIcon}🏴 ${camp.nameUk} • 👥 ${camp.population}/${camp.popCap}${warInfo}`
+      `${treatyIcon}🏴 ${camp.nameUk} • 👥 ${camp.population}/${camp.popCap}${warInfo}${bldInfo}`
     );
   }
 }

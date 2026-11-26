@@ -37,6 +37,8 @@ export interface EnemyUnitContext {
     takeDamage: (dmg: number) => void;
   } | null;
   findResourceForGatherer: (unit: EnemyUnit) => ResourceNode | null;
+  getDropPoint: (unit: EnemyUnit, type: ResourceType) => { x: number; y: number };
+  getVillageActivitySpot: (unit: EnemyUnit) => { x: number; y: number; icon: string } | null;
   onDeliverResource: (unit: EnemyUnit, type: ResourceType, amount: number) => void;
   onAttackTarget: (attacker: EnemyUnit, target: CombatTarget) => void;
   onKilled: (unit: EnemyUnit, killer?: CombatTarget) => void;
@@ -82,6 +84,7 @@ export class EnemyUnit extends Phaser.GameObjects.Container implements CombatTar
 
   private patrolPoint: Phaser.Math.Vector2 | null = null;
   private patrolWait = Phaser.Math.Between(600, 1800);
+  private patrolMoveTimerMs = 0;
   private target: CombatTarget | null = null;
   private attackCooldown = 0;
   private scanTimer = Phaser.Math.Between(50, 280);
@@ -91,10 +94,13 @@ export class EnemyUnit extends Phaser.GameObjects.Container implements CombatTar
 
   // Gatherer economy state
   private targetNode: ResourceNode | null = null;
-  private gatherSubState: 'SEEK' | 'MOVE_TO_NODE' | 'WORK' | 'RETURN_HOME' = 'SEEK';
+  private gatherSubState: 'SEEK' | 'MOVE_TO_NODE' | 'WORK' | 'RETURN_HOME' | 'VILLAGE_LIFE' = 'SEEK';
   private workTimerMs = 0;
   private carriedType: ResourceType | null = null;
   private carriedAmount = 0;
+  private villageLifeSpot: { x: number; y: number; icon: string } | null = null;
+  private villageLifeTimerMs = 0;
+  private stateMoveTimerMs = 0;
 
   // Captive walk state
   private captiveDest: { x: number; y: number; onArrived: () => void } | null = null;
@@ -478,32 +484,48 @@ export class EnemyUnit extends Phaser.GameObjects.Container implements CombatTar
         }
       }
     } else {
-      // GUARD mode patrols near home camp
+      // GUARD mode patrols widely around home camp & borders
       if (this.patrolPoint) {
+        this.patrolMoveTimerMs += delta;
         if (
+          this.patrolMoveTimerMs >= 5500 ||
           Phaser.Math.Distance.Between(
             this.x,
             this.y,
             this.patrolPoint.x,
             this.patrolPoint.y
-          ) <= 14
+          ) <= 22
         ) {
           this.patrolPoint = null;
-          this.patrolWait = Phaser.Math.Between(1500, 3200);
+          this.patrolMoveTimerMs = 0;
+          this.patrolWait = Phaser.Math.Between(900, 2100);
           this.resetAnim();
         } else {
-          this.moveToward(this.patrolPoint.x, this.patrolPoint.y, dt, 62);
+          this.moveToward(this.patrolPoint.x, this.patrolPoint.y, dt, 74);
         }
       } else {
         this.resetAnim();
         this.patrolWait -= delta;
         if (this.patrolWait <= 0) {
-          const a = Phaser.Math.FloatBetween(0, Math.PI * 2);
-          const r = Phaser.Math.Between(60, 155);
-          this.patrolPoint = new Phaser.Math.Vector2(
-            Phaser.Math.Clamp(this.homeX + Math.cos(a) * r, 90, this.ctx.worldW - 90),
-            Phaser.Math.Clamp(this.homeY + Math.sin(a) * r, 100, this.ctx.worldH - 90)
-          );
+          const obsList = this.ctx.getObstacles();
+          for (let attempt = 0; attempt < 10; attempt++) {
+            const a = Phaser.Math.FloatBetween(0, Math.PI * 2);
+            const isScout = Math.random() < 0.4;
+            const r = isScout ? Phaser.Math.Between(300, 520) : Phaser.Math.Between(140, 310);
+            const px = Phaser.Math.Clamp(this.homeX + Math.cos(a) * r, 95, this.ctx.worldW - 95);
+            const py = Phaser.Math.Clamp(this.homeY + Math.sin(a) * r, 105, this.ctx.worldH - 95);
+            const blocked = obsList.some(
+              (o) => Phaser.Math.Distance.Between(px, py, o.x, o.y) < o.radius + 20
+            );
+            if (!blocked) {
+              this.patrolPoint = new Phaser.Math.Vector2(px, py);
+              this.patrolMoveTimerMs = 0;
+              break;
+            }
+          }
+          if (!this.patrolPoint) {
+            this.patrolWait = 1000;
+          }
         }
       }
     }
@@ -512,15 +534,58 @@ export class EnemyUnit extends Phaser.GameObjects.Container implements CombatTar
   }
 
   private handleGathererAI(delta: number, dt: number): void {
+    if (this.gatherSubState === 'VILLAGE_LIFE') {
+      if (!this.villageLifeSpot) {
+        this.gatherSubState = 'SEEK';
+        return;
+      }
+      const dSpot = Phaser.Math.Distance.Between(
+        this.x,
+        this.y,
+        this.villageLifeSpot.x,
+        this.villageLifeSpot.y
+      );
+      if (dSpot > 34) {
+        this.stateMoveTimerMs += delta;
+        if (this.stateMoveTimerMs >= 4200) {
+          this.stateMoveTimerMs = 0;
+          this.villageLifeSpot = null;
+          this.refreshRoleBadge();
+          this.gatherSubState = 'SEEK';
+          return;
+        }
+        this.moveToward(this.villageLifeSpot.x, this.villageLifeSpot.y, dt, 76);
+      } else {
+        this.stateMoveTimerMs = 0;
+        this.resetAnim();
+        this.villageLifeTimerMs -= delta;
+        if (this.villageLifeTimerMs <= 0) {
+          this.villageLifeSpot = null;
+          this.refreshRoleBadge();
+          this.gatherSubState = 'SEEK';
+        }
+      }
+      return;
+    }
+
     if (this.gatherSubState === 'SEEK') {
+      this.stateMoveTimerMs = 0;
       const node = this.ctx.findResourceForGatherer(this);
       if (node && !node.depleted && node.active) {
         this.targetNode = node;
         this.gatherSubState = 'MOVE_TO_NODE';
       } else {
+        const spot = this.ctx.getVillageActivitySpot(this);
+        if (spot) {
+          this.villageLifeSpot = spot;
+          this.villageLifeTimerMs = Phaser.Math.Between(2400, 3800);
+          this.roleBadge.setText(`${spot.icon} ${this.unitName}`);
+          this.gatherSubState = 'VILLAGE_LIFE';
+          return;
+        }
         // Patrol near camp while waiting for resources
         const distHome = Phaser.Math.Distance.Between(this.x, this.y, this.homeX, this.homeY);
-        if (distHome > 160) {
+        if (distHome > 210) {
           this.moveToward(this.homeX, this.homeY, dt, 76);
         } else {
           this.resetAnim();
@@ -541,11 +606,19 @@ export class EnemyUnit extends Phaser.GameObjects.Container implements CombatTar
         this.targetNode.x,
         this.targetNode.y
       );
-      if (dist <= this.targetNode.interactRadius + 8) {
+      if (dist <= this.targetNode.interactRadius + 14) {
+        this.stateMoveTimerMs = 0;
         this.resetAnim();
         this.gatherSubState = 'WORK';
         this.workTimerMs = 0;
       } else {
+        this.stateMoveTimerMs += delta;
+        if (this.stateMoveTimerMs >= 10_000) {
+          this.stateMoveTimerMs = 0;
+          this.targetNode = null;
+          this.gatherSubState = 'SEEK';
+          return;
+        }
         this.moveToward(this.targetNode.x, this.targetNode.y, dt, 86);
       }
       return;
@@ -585,17 +658,32 @@ export class EnemyUnit extends Phaser.GameObjects.Container implements CombatTar
     }
 
     if (this.gatherSubState === 'RETURN_HOME') {
-      const distHome = Phaser.Math.Distance.Between(this.x, this.y, this.homeX, this.homeY);
-      if (distHome <= 75) {
+      const drop = this.carriedType
+        ? this.ctx.getDropPoint(this, this.carriedType)
+        : { x: this.homeX, y: this.homeY };
+      const distDrop = Phaser.Math.Distance.Between(this.x, this.y, drop.x, drop.y);
+      this.stateMoveTimerMs += delta;
+      if (distDrop <= 68 || this.stateMoveTimerMs >= 8000) {
+        this.stateMoveTimerMs = 0;
         if (this.carriedType && this.carriedAmount > 0) {
           this.ctx.onDeliverResource(this, this.carriedType, this.carriedAmount);
         }
         this.carriedType = null;
         this.carriedAmount = 0;
         this.carryIcon.setVisible(false);
+        if (Math.random() < 0.25) {
+          const spot = this.ctx.getVillageActivitySpot(this);
+          if (spot) {
+            this.villageLifeSpot = spot;
+            this.villageLifeTimerMs = Phaser.Math.Between(2200, 3400);
+            this.roleBadge.setText(`${spot.icon} ${this.unitName}`);
+            this.gatherSubState = 'VILLAGE_LIFE';
+            return;
+          }
+        }
         this.gatherSubState = 'SEEK';
       } else {
-        this.moveToward(this.homeX, this.homeY, dt, 84);
+        this.moveToward(drop.x, drop.y, dt, 86);
       }
     }
   }

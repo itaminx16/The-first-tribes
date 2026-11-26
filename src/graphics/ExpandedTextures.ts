@@ -1528,4 +1528,362 @@ function createExpandedBuildings(scene: Phaser.Scene): void {
       ctx.fill();
     });
   }
+
+  // --- MAMMOTH (Giant herd beast) ---
+  makeCanvas(scene, 'animal-mammoth-leg', 24, 34, (ctx) => {
+    ctx.fillStyle = '#5c3a21';
+    ctx.strokeStyle = OUTLINE;
+    ctx.lineWidth = 2;
+    drawRoundedRect(ctx, 5, 2, 14, 28, 5);
+    ctx.fill();
+    ctx.stroke();
+  });
+
+  makeCanvas(scene, 'animal-mammoth-body', 134, 108, (ctx) => {
+    // Shaggy wool body
+    const furGrad = ctx.createRadialGradient(54, 48, 8, 58, 52, 54);
+    furGrad.addColorStop(0, '#9a5b32');
+    furGrad.addColorStop(0.65, '#6b3e1f');
+    furGrad.addColorStop(1, '#432512');
+    ctx.fillStyle = furGrad;
+    ctx.strokeStyle = OUTLINE;
+    ctx.lineWidth = 2.4;
+    ctx.beginPath();
+    ctx.ellipse(54, 58, 44, 32, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // High shaggy crown / head dome
+    ctx.beginPath();
+    ctx.ellipse(90, 42, 24, 24, -0.15, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Ear
+    ctx.fillStyle = '#573118';
+    ctx.beginPath();
+    ctx.ellipse(76, 46, 8, 13, 0.25, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Long curved trunk
+    ctx.fillStyle = '#6b3e1f';
+    ctx.beginPath();
+    ctx.moveTo(106, 44);
+    ctx.quadraticCurveTo(126, 62, 118, 92);
+    ctx.quadraticCurveTo(114, 98, 108, 93);
+    ctx.quadraticCurveTo(112, 70, 96, 56);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Giant curved ivory tusks
+    ctx.fillStyle = '#fef9c3';
+    ctx.strokeStyle = '#78350f';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(96, 54);
+    ctx.quadraticCurveTo(128, 66, 130, 36);
+    ctx.quadraticCurveTo(122, 56, 94, 48);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Eye
+    ctx.fillStyle = '#111827';
+    ctx.beginPath();
+    ctx.arc(98, 36, 2.6, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  makeCanvas(scene, 'carcass-mammoth', 106, 76, (ctx) => {
+    ctx.fillStyle = 'rgba(0,0,0,0.22)';
+    ctx.beginPath();
+    ctx.ellipse(53, 56, 44, 15, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#6b3e1f';
+    ctx.strokeStyle = OUTLINE;
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.ellipse(46, 42, 34, 20, -0.08, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#fef9c3';
+    ctx.beginPath();
+    ctx.moveTo(68, 44);
+    ctx.quadraticCurveTo(96, 52, 98, 28);
+    ctx.quadraticCurveTo(90, 44, 68, 38);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  });
+
+  // --- CHIEF HUT (Хатина Вождя) ---
+  makeCanvas(scene, 'building-chief_hut-0', 160, 140, (ctx) => {
+    ctx.fillStyle = '#5c3a21';
+    ctx.strokeStyle = OUTLINE;
+    ctx.lineWidth = 2;
+    for (const px of [44, 80, 116]) {
+      drawRoundedRect(ctx, px - 4, 86, 8, 36, 3);
+      ctx.fill();
+      ctx.stroke();
+    }
+  });
+  makeCanvas(scene, 'building-chief_hut-1', 160, 140, (ctx) => {
+    ctx.fillStyle = '#7c4d2b';
+    ctx.strokeStyle = OUTLINE;
+    ctx.lineWidth = 2;
+    drawRoundedRect(ctx, 34, 64, 92, 60, 10);
+    ctx.fill();
+    ctx.stroke();
+  });
+  for (const winter of [false, true]) {
+    makeCanvas(
+      scene,
+      winter ? 'building-chief_hut-2-winter' : 'building-chief_hut-2',
+      160,
+      140,
+      (ctx) => {
+        ctx.fillStyle = 'rgba(0,0,0,0.24)';
+        ctx.beginPath();
+        ctx.ellipse(80, 124, 58, 14, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Grand wooden hall
+        ctx.fillStyle = '#7c4d2b';
+        ctx.strokeStyle = OUTLINE;
+        ctx.lineWidth = 2.2;
+        drawRoundedRect(ctx, 34, 66, 92, 56, 8);
+        ctx.fill();
+        ctx.stroke();
+
+        // Doorway
+        ctx.fillStyle = '#29170b';
+        drawRoundedRect(ctx, 68, 86, 24, 36, 10);
+        ctx.fill();
+        ctx.stroke();
+
+        // Ornate peaked roof + chief horns
+        ctx.fillStyle = winter ? '#e2effa' : '#b45309';
+        ctx.beginPath();
+        ctx.moveTo(22, 72);
+        ctx.lineTo(80, 20);
+        ctx.lineTo(138, 72);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        // Golden tribal crest & twin horns
+        ctx.fillStyle = '#facc15';
+        ctx.beginPath();
+        ctx.arc(80, 44, 8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#fef9c3';
+        ctx.beginPath();
+        ctx.moveTo(72, 24);
+        ctx.quadraticCurveTo(56, 10, 60, 4);
+        ctx.quadraticCurveTo(64, 14, 77, 20);
+        ctx.moveTo(88, 24);
+        ctx.quadraticCurveTo(104, 10, 100, 4);
+        ctx.quadraticCurveTo(96, 14, 83, 20);
+        ctx.fill();
+        ctx.stroke();
+      }
+    );
+  }
+  makeCanvas(scene, 'icon-chief_hut', 44, 44, (ctx) => {
+    ctx.fillStyle = '#b45309';
+    ctx.strokeStyle = OUTLINE;
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.moveTo(6, 26);
+    ctx.lineTo(22, 9);
+    ctx.lineTo(38, 26);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#7c4d2b';
+    drawRoundedRect(ctx, 11, 26, 22, 12, 3);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#facc15';
+    ctx.beginPath();
+    ctx.arc(22, 18, 4, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // --- TRAINING GROUND / GYM (Спортзал, велика арена для до 3 осіб) ---
+  makeCanvas(scene, 'building-training_ground-0', 208, 160, (ctx) => {
+    ctx.fillStyle = '#78350f';
+    ctx.strokeStyle = OUTLINE;
+    ctx.lineWidth = 2;
+    drawRoundedRect(ctx, 36, 98, 136, 38, 8);
+    ctx.fill();
+    ctx.stroke();
+  });
+  makeCanvas(scene, 'building-training_ground-1', 208, 160, (ctx) => {
+    ctx.fillStyle = '#92400e';
+    ctx.strokeStyle = OUTLINE;
+    ctx.lineWidth = 2;
+    drawRoundedRect(ctx, 28, 84, 152, 52, 12);
+    ctx.fill();
+    ctx.stroke();
+    drawRoundedRect(ctx, 52, 54, 12, 58, 3);
+    ctx.fill();
+    ctx.stroke();
+    drawRoundedRect(ctx, 146, 62, 12, 50, 3);
+    ctx.fill();
+    ctx.stroke();
+  });
+  for (const winter of [false, true]) {
+    makeCanvas(
+      scene,
+      winter ? 'building-training_ground-2-winter' : 'building-training_ground-2',
+      208,
+      160,
+      (ctx) => {
+        // Wide sand/snow training ring
+        ctx.fillStyle = winter ? '#cbd5e1' : '#a16207';
+        ctx.strokeStyle = OUTLINE;
+        ctx.lineWidth = 2.2;
+        ctx.beginPath();
+        ctx.ellipse(104, 114, 86, 34, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Wooden fence posts around back edge
+        for (const px of [34, 70, 138, 174]) {
+          ctx.fillStyle = '#5c3419';
+          drawRoundedRect(ctx, px - 4, 74, 8, 28, 2);
+          ctx.fill();
+          ctx.stroke();
+        }
+
+        // Left: Heavy training dummy post & crossbar
+        ctx.fillStyle = '#78350f';
+        drawRoundedRect(ctx, 48, 52, 14, 62, 3);
+        ctx.fill();
+        ctx.stroke();
+        drawRoundedRect(ctx, 36, 64, 38, 9, 3);
+        ctx.fill();
+        ctx.stroke();
+
+        // Center: Heavy lifting log & stone weights
+        ctx.fillStyle = '#6b4226';
+        drawRoundedRect(ctx, 84, 98, 40, 12, 4);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#64748b';
+        ctx.beginPath();
+        ctx.arc(82, 104, 8, 0, Math.PI * 2);
+        ctx.arc(126, 104, 8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Right: Archery straw target
+        ctx.fillStyle = '#fde047';
+        ctx.beginPath();
+        ctx.arc(152, 78, 20, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#ef4444';
+        ctx.beginPath();
+        ctx.arc(152, 78, 10, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#7c2d12';
+        drawRoundedRect(ctx, 148, 98, 8, 24, 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+    );
+  }
+  makeCanvas(scene, 'icon-training_ground', 44, 44, (ctx) => {
+    ctx.fillStyle = '#fde047';
+    ctx.strokeStyle = OUTLINE;
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.arc(24, 21, 13, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#ef4444';
+    ctx.beginPath();
+    ctx.arc(24, 21, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#78350f';
+    drawRoundedRect(ctx, 10, 12, 6, 24, 2);
+    ctx.fill();
+    ctx.stroke();
+  });
+
+  // --- ANIMAL PEN (Загін звірів) ---
+  makeCanvas(scene, 'building-animal_pen-0', 160, 140, (ctx) => {
+    ctx.strokeStyle = '#78350f';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(34, 72, 92, 46);
+  });
+  makeCanvas(scene, 'building-animal_pen-1', 160, 140, (ctx) => {
+    ctx.fillStyle = '#7c5338';
+    ctx.strokeStyle = OUTLINE;
+    ctx.lineWidth = 2;
+    for (const px of [34, 64, 96, 126]) {
+      drawRoundedRect(ctx, px - 4, 68, 8, 48, 3);
+      ctx.fill();
+      ctx.stroke();
+    }
+  });
+  for (const winter of [false, true]) {
+    makeCanvas(
+      scene,
+      winter ? 'building-animal_pen-2-winter' : 'building-animal_pen-2',
+      160,
+      140,
+      (ctx) => {
+        // Mud / grass pen floor
+        ctx.fillStyle = winter ? '#cbd5e1' : '#854d0e';
+        ctx.strokeStyle = OUTLINE;
+        ctx.lineWidth = 2;
+        drawRoundedRect(ctx, 26, 64, 108, 56, 12);
+        ctx.fill();
+        ctx.stroke();
+
+        // Tame boar inside pen
+        ctx.fillStyle = '#573118';
+        ctx.beginPath();
+        ctx.ellipse(66, 92, 16, 11, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#9a6b4c';
+        ctx.beginPath();
+        ctx.ellipse(100, 95, 13, 9, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Wooden fence rails & posts
+        ctx.fillStyle = winter ? '#e2effa' : '#78350f';
+        drawRoundedRect(ctx, 24, 112, 112, 6, 2);
+        ctx.fill();
+        ctx.stroke();
+        for (const px of [28, 62, 98, 130]) {
+          ctx.fillStyle = '#5c3419';
+          drawRoundedRect(ctx, px - 4, 98, 8, 24, 2);
+          ctx.fill();
+          ctx.stroke();
+        }
+      }
+    );
+  }
+  makeCanvas(scene, 'icon-animal_pen', 44, 44, (ctx) => {
+    ctx.fillStyle = '#854d0e';
+    ctx.strokeStyle = OUTLINE;
+    ctx.lineWidth = 1.8;
+    drawRoundedRect(ctx, 6, 12, 32, 24, 5);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#5c3419';
+    ctx.beginPath();
+    ctx.ellipse(22, 24, 10, 7, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  });
 }

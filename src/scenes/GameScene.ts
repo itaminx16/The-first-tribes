@@ -30,6 +30,8 @@ import {
   BREED_MIN_FOOD,
   BUILDING_DEFS,
   BuildingType,
+  BuildingSnapshot,
+  BuildingUnlockInfo,
   CalendarState,
   ChiefStatus,
   CombatTarget,
@@ -37,10 +39,11 @@ import {
   formatAgeUk,
   GameSetupConfig,
   GEAR_DEFENSE_RESERVE,
+  getBuildingUnlockInfo,
+  getBuildingUpgradeCost,
   GRANARY_STORAGE_BONUS,
-  HUT_POP_BONUS,
-  LARGE_HUT_POP_BONUS,
   MAP_PRESETS,
+  MAX_BUILDING_LEVEL,
   MAX_PREDATORS,
   MAX_STORAGE,
   MinimapData,
@@ -324,14 +327,14 @@ export class GameScene extends Phaser.Scene {
     this.storageCap = MAX_STORAGE;
     const startMult =
       this.gameConfig.difficulty === 'easy'
-        ? 15
+        ? 36
         : this.gameConfig.difficulty === 'normal'
-        ? 5
-        : 0;
+        ? 28
+        : 16;
     this.resources = {
       wood: startMult,
-      stone: startMult,
-      food: startMult,
+      stone: Math.round(startMult * 0.65),
+      food: Math.round(startMult * 0.85),
       bone: 0,
       hide: 0,
       storageCap: MAX_STORAGE,
@@ -413,6 +416,9 @@ export class GameScene extends Phaser.Scene {
     );
     uiScene.events.on('demolish-building', (buildingId: string) => {
       this.demolishBuildingById(buildingId);
+    });
+    uiScene.events.on('upgrade-building', (buildingId: string) => {
+      this.upgradeBuildingById(buildingId);
     });
     uiScene.events.on('research-tech', (branch: TechBranchId) => {
       this.researchTech(branch);
@@ -555,6 +561,7 @@ export class GameScene extends Phaser.Scene {
     this.emitMinimap();
     this.emitRivals();
     this.emitRoster();
+    this.emitBuildUnlocks();
     this.events.emit('config-updated', { ...this.gameConfig });
     this.events.emit('build-mode-updated', this.buildType);
     this.events.emit('marquee-mode-updated', this.touchMarqueeMode);
@@ -594,7 +601,8 @@ export class GameScene extends Phaser.Scene {
         x: h.x,
         y: h.y,
         isLarge: h.isLarge,
-        progress: h.getProgress()
+        progress: h.getProgress(),
+        level: h.level
       })),
       buildings: this.buildings
         .filter((b) => Boolean(b.scene))
@@ -606,7 +614,8 @@ export class GameScene extends Phaser.Scene {
           progress: b.getProgress(),
           hp: b.hp,
           targetWarriors: b.targetWarriors,
-          angle: b.bridgeAngle
+          angle: b.bridgeAngle,
+          level: b.getLevel()
         })),
       villagers: this.villagers
         .filter((v) => v.isAlive())
@@ -699,6 +708,9 @@ export class GameScene extends Phaser.Scene {
       if (sh.progress > 0) {
         hut.addBuildWork(sh.progress * 2);
       }
+      if (sh.level && sh.level > 1) {
+        hut.setLevel(sh.level);
+      }
       hut.setSeason(this.season);
       this.huts.push(hut);
     }
@@ -719,7 +731,10 @@ export class GameScene extends Phaser.Scene {
       if (sb.progress > 0) {
         tb.addBuildWork(sb.progress * 2);
       }
-      tb.hp = sb.hp;
+      if (sb.level && sb.level > 1) {
+        tb.setLevel(sb.level);
+      }
+      tb.hp = Math.min(tb.maxHp, sb.hp);
       tb.setTargetWarriors(sb.targetWarriors);
       tb.setSeason(this.season);
       this.buildings.push(tb);
@@ -921,7 +936,7 @@ export class GameScene extends Phaser.Scene {
         viewers.push({
           x: b.x,
           y: b.y,
-          radius: b.buildingType === 'watchtower' ? 480 : 260
+          radius: b.buildingType === 'watchtower' ? 480 + (b.getLevel() - 1) * 70 : 260
         });
       }
     }
@@ -1297,6 +1312,7 @@ export class GameScene extends Phaser.Scene {
     );
     this.emitChiefStatus();
     this.emitSelection();
+    this.emitBuildUnlocks();
   }
 
   private handleVillagerStartedDying(dying: Villager): void {
@@ -1378,14 +1394,55 @@ export class GameScene extends Phaser.Scene {
     this.emitPopulation();
     this.emitChiefStatus();
     this.emitSelection();
+    this.emitBuildUnlocks();
   }
 
   private toggleBuildMode(type: BuildingType): void {
     if (this.isBuildMode && this.buildType === type) {
       this.setBuildMode(null);
-    } else {
-      this.setBuildMode(type);
+      return;
     }
+    const unlockMap = this.getBuildingUnlockMap();
+    const info = unlockMap[type];
+    if (info && !info.unlocked) {
+      this.showFloatingText(
+        this.campfire.x,
+        this.campfire.y - 84,
+        `🔒 ${BUILDING_DEFS[type].nameUk}: ${info.reasonUk ?? 'ще заблоковано'}`
+      );
+      SoundFX.playBlocked();
+      return;
+    }
+    this.setBuildMode(type);
+  }
+
+  private getCompletedBuildingTypes(): Set<BuildingType> {
+    const set = new Set<BuildingType>();
+    for (const h of this.huts) {
+      if (h.isComplete()) set.add(h.isLarge ? 'large_hut' : 'hut');
+    }
+    for (const b of this.buildings) {
+      if (b.scene && b.isComplete()) set.add(b.buildingType);
+    }
+    return set;
+  }
+
+  private getBuildingUnlockMap(): Record<BuildingType, BuildingUnlockInfo> {
+    const completed = this.getCompletedBuildingTypes();
+    const popCount = this.villagers.filter((v) => v.isAlive()).length;
+    const hasChief = Boolean(
+      this.chiefId && this.villagers.some((v) => v.id === this.chiefId && v.isAlive())
+    );
+    const isSandbox = this.gameConfig.mode === 'sandbox';
+    const out = {} as Record<BuildingType, BuildingUnlockInfo>;
+    for (const key of Object.keys(BUILDING_DEFS) as BuildingType[]) {
+      out[key] = getBuildingUnlockInfo(key, completed, popCount, hasChief, isSandbox);
+    }
+    return out;
+  }
+
+  private emitBuildUnlocks(): void {
+    this.events.emit('build-unlocks-updated', this.getBuildingUnlockMap());
   }
 
   private setBuildMode(type: BuildingType | null): void {
@@ -1711,15 +1768,18 @@ export class GameScene extends Phaser.Scene {
     this.rebuildObstacleCache();
     this.emitPopulation();
     this.emitRoster();
+    this.emitBuildUnlocks();
   }
 
   private restoreCampfireStorageIfNoGranary(): void {
-    const hasGranary = this.buildings.some(
+    const granaries = this.buildings.filter(
       (item) => item.scene && item.buildingType === 'granary' && item.isComplete()
     );
+    this.storageCap =
+      MAX_STORAGE + granaries.reduce((sum, g) => sum + g.getGranaryBonus(), 0);
+    this.resources.storageCap = this.storageCap;
+    const hasGranary = granaries.length > 0;
     if (!hasGranary && this.campfireStoragesHidden) {
-      this.storageCap = Math.max(MAX_STORAGE, this.storageCap - GRANARY_STORAGE_BONUS);
-      this.resources.storageCap = this.storageCap;
       this.campfireStoragesHidden = false;
       for (const st of Object.values(this.storages)) {
         st.setMaxCapacity(this.storageCap);
@@ -1730,6 +1790,11 @@ export class GameScene extends Phaser.Scene {
         d.setVisible(true);
       }
       this.syncStorageAmounts();
+      this.emitResources();
+    } else {
+      for (const st of Object.values(this.storages)) {
+        st.setMaxCapacity(this.storageCap);
+      }
       this.emitResources();
     }
   }
@@ -2034,6 +2099,132 @@ export class GameScene extends Phaser.Scene {
     this.emitResources();
     this.emitPopulation();
     this.emitRoster();
+    this.emitBuildUnlocks();
+  }
+
+  private recomputePopulationCap(): void {
+    let cap = BASE_POP_CAP;
+    for (const h of this.huts) {
+      if (h.isComplete()) cap += h.getPopBonus();
+    }
+    this.populationCap = cap;
+  }
+
+  private getHutSnapshot(hut: Hut, idx: number): BuildingSnapshot {
+    const bType: BuildingType = hut.isLarge ? 'large_hut' : 'hut';
+    const def = BUILDING_DEFS[bType];
+    const upgradeCost = hut.isComplete() ? getBuildingUpgradeCost(bType, hut.level) : null;
+    const popGain = hut.isLarge ? 3 : 2;
+    return {
+      id: `hut-${idx}`,
+      type: bType,
+      nameUk: `${def.nameUk} (Рів.${hut.level})`,
+      descUk: def.descUk,
+      isComplete: hut.isComplete(),
+      progress: hut.getProgress(),
+      profession: null,
+      professionLabel: null,
+      assignedWorkerId: null,
+      assignedWorkerName: null,
+      assignedWorkerLevel: 0,
+      assignedWorkers: [],
+      maxWorkers: 0,
+      statusNote: `🏠 Місткість: +${hut.getPopBonus()} населення • Спальних місць: ${hut.getMaxSleepers()}`,
+      canDemolish: false,
+      level: hut.level,
+      maxLevel: MAX_BUILDING_LEVEL,
+      upgradeCost,
+      upgradeDescUk:
+        upgradeCost !== null
+          ? `Рів.${hut.level + 1}: +${popGain} до ліміту населення та +2 спальних місця`
+          : undefined
+    };
+  }
+
+  private selectHut(hut: Hut): void {
+    const idx = this.huts.indexOf(hut);
+    if (idx < 0) return;
+    this.selectedBuilding = null;
+    this.events.emit('building-selected', this.getHutSnapshot(hut, idx));
+  }
+
+  private upgradeBuildingById(buildingId: string): void {
+    if (buildingId.startsWith('hut-')) {
+      const idx = Number(buildingId.slice(4));
+      const hut = Number.isInteger(idx) ? this.huts[idx] : undefined;
+      if (!hut || !hut.isComplete()) return;
+      const bType: BuildingType = hut.isLarge ? 'large_hut' : 'hut';
+      const cost = getBuildingUpgradeCost(bType, hut.level);
+      if (!cost) return;
+      if (
+        this.gameConfig.mode !== 'sandbox' &&
+        (this.resources.wood < cost.wood ||
+          this.resources.stone < cost.stone ||
+          (cost.bone ?? 0) > this.resources.bone ||
+          (cost.hide ?? 0) > this.resources.hide)
+      ) {
+        this.showFloatingText(hut.x, hut.y - 68, 'Недостатньо ресурсів для покращення!');
+        SoundFX.playBlocked();
+        return;
+      }
+      if (this.gameConfig.mode !== 'sandbox') {
+        this.resources.wood -= cost.wood;
+        this.resources.stone -= cost.stone;
+        this.resources.bone -= cost.bone ?? 0;
+        this.resources.hide -= cost.hide ?? 0;
+        this.syncStorageAmounts();
+      }
+      if (hut.upgrade()) {
+        this.recomputePopulationCap();
+        SoundFX.playBuildComplete();
+        this.showFloatingText(
+          hut.x,
+          hut.y - 72,
+          `⬆️ Покращено до Рів.${hut.level}! (+${hut.isLarge ? 3 : 2} населення)`
+        );
+        this.emitResources();
+        this.emitPopulation();
+        this.events.emit('building-selected', this.getHutSnapshot(hut, idx));
+      }
+      return;
+    }
+
+    const b = this.buildings.find((item) => item.buildingId === buildingId && item.scene);
+    if (!b || !b.isComplete()) return;
+    const cost = getBuildingUpgradeCost(b.buildingType, b.getLevel());
+    if (!cost) return;
+    if (
+      this.gameConfig.mode !== 'sandbox' &&
+      (this.resources.wood < cost.wood ||
+        this.resources.stone < cost.stone ||
+        (cost.bone ?? 0) > this.resources.bone ||
+        (cost.hide ?? 0) > this.resources.hide)
+    ) {
+      this.showFloatingText(b.x, b.y - 68, 'Недостатньо ресурсів для покращення!');
+      SoundFX.playBlocked();
+      return;
+    }
+    if (this.gameConfig.mode !== 'sandbox') {
+      this.resources.wood -= cost.wood;
+      this.resources.stone -= cost.stone;
+      this.resources.bone -= cost.bone ?? 0;
+      this.resources.hide -= cost.hide ?? 0;
+      this.syncStorageAmounts();
+    }
+    if (b.upgrade()) {
+      if (b.buildingType === 'granary') {
+        this.storageCap += GRANARY_STORAGE_BONUS;
+        this.resources.storageCap = this.storageCap;
+        for (const st of Object.values(this.storages)) {
+          st.setMaxCapacity(this.storageCap);
+        }
+      }
+      SoundFX.playBuildComplete();
+      this.showFloatingText(b.x, b.y - 72, `⬆️ ${b.nameUk} покращено до Рів.${b.getLevel()}!`);
+      this.emitResources();
+      this.emitPopulation();
+      this.events.emit('building-selected', b.getSnapshot());
+    }
   }
 
   private assignVillagerByIdToBuilding(buildingId: string, villagerId: string): void {
@@ -2256,6 +2447,7 @@ export class GameScene extends Phaser.Scene {
     this.emitResources();
     this.emitTech();
     this.emitSelection();
+    this.emitBuildUnlocks();
   }
 
   private toggleManualDefenseAlarm(): void {
@@ -2399,8 +2591,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   private handleHutCompleted(hut: Hut): void {
-    const bonus = hut.isLarge ? LARGE_HUT_POP_BONUS : HUT_POP_BONUS;
-    this.populationCap += bonus;
+    const bonus = hut.getPopBonus();
+    this.recomputePopulationCap();
     SoundFX.playBuildComplete();
     this.showFloatingText(
       hut.x,
@@ -2408,6 +2600,7 @@ export class GameScene extends Phaser.Scene {
       `${hut.isLarge ? 'Велика хатина' : 'Мала хатина'} збудована! (+${bonus} населення)`
     );
     this.emitPopulation();
+    this.emitBuildUnlocks();
   }
 
   private checkTribeBreeding(delta: number): void {
@@ -2495,6 +2688,7 @@ export class GameScene extends Phaser.Scene {
     SoundFX.playBirth();
     this.showFloatingText(hut.x, hut.y - 72, `👶 Народилася дитина (${name})!`);
     this.emitPopulation();
+    this.emitBuildUnlocks();
   }
 
   private createTerrain(): void {
@@ -2945,6 +3139,40 @@ export class GameScene extends Phaser.Scene {
         break;
       }
     }
+
+    // Ensure 1-2 giant Mammoths roam the outer wilderness for group hunts
+    const aliveMammoths = this.animals.filter((a) => a.isAlive() && a.species === 'mammoth').length;
+    for (let m = aliveMammoths; m < 2; m++) {
+      for (let attempt = 0; attempt < 25; attempt++) {
+        const mx = Phaser.Math.Between(240, this.worldWidth - 240);
+        const my = Phaser.Math.Between(240, this.worldHeight - 240);
+        if (Phaser.Math.Distance.Between(mx, my, this.playerBaseX, this.playerBaseY) < 520) continue;
+        if (!this.isClearWildernessSpot(mx, my, 92)) continue;
+        const mammoth = new Animal(
+          this,
+          mx,
+          my,
+          'mammoth',
+          this.worldWidth,
+          this.worldHeight,
+          () => this.getObstacles(),
+          (killed) => this.spawnCarcass(killed.x, killed.y, 'mammoth'),
+          (beast) => {
+            for (const v of this.villagers) {
+              if (
+                v.isAlive() &&
+                !v.isGarrisonedInWatchtower() &&
+                Phaser.Math.Distance.Between(v.x, v.y, beast.x, beast.y) <= 82
+              ) {
+                v.takeDamage(14, beast.x, beast.y);
+              }
+            }
+          }
+        );
+        this.animals.push(mammoth);
+        break;
+      }
+    }
   }
 
   private createPredators(): void {
@@ -2997,7 +3225,7 @@ export class GameScene extends Phaser.Scene {
   private spawnCarcass(x: number, y: number, kind: CarcassKind): AnimalCarcass {
     const c = new AnimalCarcass(this, x, y, kind);
     this.carcasses.push(c);
-    this.showFloatingText(x, y - 34, '🍖15 🦴10 🧥5');
+    this.showFloatingText(x, y - 34, kind === 'mammoth' ? '🦣 🍖60 🦴35 🧥25' : '🍖15 🦴10 🧥5');
     return c;
   }
 
@@ -3073,6 +3301,38 @@ export class GameScene extends Phaser.Scene {
         this.findNearbyIdleVillager(requester, maxRadius),
       findAvailableSleepHut: (x, y) => this.findAvailableSleepHut(x, y),
       findCompletedNursery: (x, y) => this.findCompletedNursery(x, y),
+      findAvailableGym: (x, y) => {
+        let best: TribeBuilding | null = null;
+        let bestDist = Infinity;
+        for (const b of this.buildings) {
+          if (b.scene && b.canAcceptTrainee()) {
+            const d = Phaser.Math.Distance.Between(x, y, b.x, b.y);
+            if (d < bestDist) {
+              bestDist = d;
+              best = b;
+            }
+          }
+        }
+        return best;
+      },
+      findNearbyFlowerSpot: (x, y) => {
+        let best: { x: number; y: number } | null = null;
+        let bestDist = 380;
+        for (const f of this.flowerDecals) {
+          if (!f.scene) continue;
+          const d = Phaser.Math.Distance.Between(x, y, f.x, f.y);
+          if (d < bestDist) {
+            bestDist = d;
+            best = { x: f.x, y: f.y };
+          }
+        }
+        if (best) return best;
+        const a = Phaser.Math.FloatBetween(0, Math.PI * 2);
+        return {
+          x: Phaser.Math.Clamp(this.playerBaseX + Math.cos(a) * 145, 90, this.worldWidth - 90),
+          y: Phaser.Math.Clamp(this.playerBaseY + Math.sin(a) * 115, 100, this.worldHeight - 90)
+        };
+      },
       findGathererTask: (hut, v) => this.findGathererTask(hut, v),
       onEnemyConvertedToCaptive: (enemy, shaman) => this.handleEnemyConvertedToCaptive(enemy, shaman),
       findUnfinishedBuilding: (x, y) => this.findUnfinishedBuilding(x, y),
@@ -3110,6 +3370,20 @@ export class GameScene extends Phaser.Scene {
       getVillagers: () => this.villagers,
       hasChief: () => Boolean(this.chiefId && this.villagers.some((v) => v.id === this.chiefId && v.scene)),
       hasTotem: () => this.buildings.some((b) => b.buildingType === 'totem' && b.isComplete()),
+      getChiefHutAuraLevel: (x: number, y: number) => {
+        let best = 0;
+        for (const b of this.buildings) {
+          if (
+            b.scene &&
+            b.buildingType === 'chief_hut' &&
+            b.isComplete() &&
+            Phaser.Math.Distance.Between(x, y, b.x, b.y) <= 340 + b.getLevel() * 40
+          ) {
+            best = Math.max(best, b.getLevel());
+          }
+        }
+        return best;
+      },
       onDepositResource: (type, amount, x, y) => {
         const space = Math.max(0, this.storageCap - this.resources[type]);
         const added = Math.min(amount, space);
@@ -3122,7 +3396,7 @@ export class GameScene extends Phaser.Scene {
           this.showFloatingText(x, y, `Склад повний (${this.storageCap}/${this.storageCap})!`);
         }
       },
-      onStationCycleComplete: (_villager, building) => {
+      onStationCycleComplete: (villager, building) => {
         if (building.buildingType === 'workshop' || building.buildingType === 'armory') {
           this.completeCraftingStation(building);
         } else if (building.buildingType === 'smokehouse') {
@@ -3133,6 +3407,27 @@ export class GameScene extends Phaser.Scene {
             this.emitResources();
             this.showFloatingText(building.x, building.y - 68, `+${added} Копчена їжа`);
           }
+        } else if (building.buildingType === 'animal_pen') {
+          const lvl = building.getLevel();
+          const foodAdd = Math.min(4 + (lvl - 1) * 2, Math.max(0, this.storageCap - this.resources.food));
+          const hideAdd = Math.min(2 + (lvl - 1), Math.max(0, this.storageCap - this.resources.hide));
+          if (foodAdd > 0 || hideAdd > 0) {
+            this.resources.food += foodAdd;
+            this.resources.hide += hideAdd;
+            this.syncStorageAmounts();
+            this.emitResources();
+            this.showFloatingText(building.x, building.y - 68, `🐗 +${foodAdd}🍖 +${hideAdd}🧥`);
+          }
+        } else if (building.buildingType === 'training_ground') {
+          const res = villager.applyGymTraining(building.getLevel());
+          if (res.hpGain > 0 || res.dmgGain > 0) {
+            this.showFloatingText(
+              building.x,
+              building.y - 68,
+              `🏋️ ${villager.villagerName}: +${res.hpGain}HP +${res.dmgGain}⚔️`
+            );
+          }
+          this.emitSelection();
         } else if (building.buildingType === 'totem') {
           this.resources.knowledge += 6;
           this.emitResources();
@@ -3190,7 +3485,17 @@ export class GameScene extends Phaser.Scene {
         spouseId: 'v3',
         spouseName: 'Ая'
       },
-      { id: 'v2', name: 'Тук', gender: 'male', appearance: 'male-2', ox: 82, oy: 44, age: 22 },
+      {
+        id: 'v2',
+        name: 'Тук',
+        gender: 'male',
+        appearance: 'male-2',
+        ox: 82,
+        oy: 44,
+        age: 22,
+        spouseId: 'v4',
+        spouseName: 'Ула'
+      },
       {
         id: 'v3',
         name: 'Ая',
@@ -3201,6 +3506,17 @@ export class GameScene extends Phaser.Scene {
         age: 20,
         spouseId: 'v1',
         spouseName: 'Огг'
+      },
+      {
+        id: 'v4',
+        name: 'Ула',
+        gender: 'female',
+        appearance: 'female',
+        ox: -4,
+        oy: 76,
+        age: 21,
+        spouseId: 'v2',
+        spouseName: 'Тук'
       }
     ];
 
@@ -3572,6 +3888,8 @@ export class GameScene extends Phaser.Scene {
               } else {
                 this.selectBuilding(hitBuilding);
               }
+            } else if (hitHut && hitHut.isComplete()) {
+              this.selectHut(hitHut);
             } else if (hitCampfire) {
               this.events.emit('campfire-clicked');
             } else {
@@ -3613,6 +3931,9 @@ export class GameScene extends Phaser.Scene {
               this.selectBuilding(hitBuilding);
             }
             SoundFX.playSelect();
+          } else if (hitHut && hitHut.isComplete() && this.selectedVillagers.length === 0) {
+            this.selectHut(hitHut);
+            SoundFX.playSelect();
           } else if (hitCampfire) {
             this.events.emit('campfire-clicked');
           } else if (this.selectedVillagers.length > 0) {
@@ -3644,6 +3965,7 @@ export class GameScene extends Phaser.Scene {
       v.setSelected(true);
     }
     this.emitSelection();
+    this.emitBuildUnlocks();
   }
 
   private issueCommandToGroup(

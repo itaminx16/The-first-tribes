@@ -1,10 +1,17 @@
 import Phaser from 'phaser';
-import { BREED_DURATION_MS, Season } from '../types/game';
+import {
+  BREED_DURATION_MS,
+  HUT_POP_BONUS,
+  LARGE_HUT_POP_BONUS,
+  MAX_BUILDING_LEVEL,
+  Season,
+} from '../types/game';
 import { CURSORS } from '../utils/Cursors';
 import type { Villager } from './Villager';
 
 export class Hut extends Phaser.GameObjects.Container {
   public readonly isLarge: boolean;
+  public level = 1;
   private progress = 0;
   private completedFired = false;
   private season: Season = 'SPRING';
@@ -12,12 +19,14 @@ export class Hut extends Phaser.GameObjects.Container {
 
   private hoverRing: Phaser.GameObjects.Ellipse;
   private doorGlow: Phaser.GameObjects.Ellipse;
+  private upgradeTrim: Phaser.GameObjects.Graphics;
   private sprite: Phaser.GameObjects.Image;
+  private levelBadge: Phaser.GameObjects.Text;
   private progressBg: Phaser.GameObjects.Graphics;
   private progressFill: Phaser.GameObjects.Graphics;
 
   private sleepers = new Set<Villager>();
-  private readonly maxSleepers: number;
+  private maxSleepers: number;
   private zzzTimer = 400;
 
   private breedingPair: [Villager, Villager] | null = null;
@@ -49,8 +58,19 @@ export class Hut extends Phaser.GameObjects.Container {
     this.hoverRing.setVisible(false);
 
     const initTex = isLarge ? 'building-large_hut-0' : 'hut-stage-0';
+    this.upgradeTrim = scene.add.graphics();
     this.sprite = scene.add.image(0, 0, initTex);
     this.sprite.setOrigin(0.5, 0.825);
+    this.levelBadge = scene.add
+      .text(0, isLarge ? -104 : -88, '', {
+        fontSize: '11px',
+        fontStyle: 'bold',
+        color: '#facc15',
+        backgroundColor: '#261a11cc',
+        padding: { x: 4, y: 1 },
+      })
+      .setOrigin(0.5)
+      .setVisible(false);
 
     this.doorGlow = scene.add.ellipse(0, -14, isLarge ? 38 : 30, isLarge ? 36 : 32, 0xffa94d, 0.42);
     this.doorGlow.setVisible(false);
@@ -60,8 +80,10 @@ export class Hut extends Phaser.GameObjects.Container {
 
     this.add([
       this.hoverRing,
+      this.upgradeTrim,
       this.sprite,
       this.doorGlow,
+      this.levelBadge,
       this.progressBg,
       this.progressFill,
     ]);
@@ -84,6 +106,45 @@ export class Hut extends Phaser.GameObjects.Container {
 
     this.drawProgressBar();
     scene.add.existing(this);
+  }
+
+  public getPopBonus(): number {
+    const base = this.isLarge ? LARGE_HUT_POP_BONUS : HUT_POP_BONUS;
+    const perLvl = this.isLarge ? 3 : 2;
+    return base + (this.level - 1) * perLvl;
+  }
+
+  public getMaxSleepers(): number {
+    return this.maxSleepers;
+  }
+
+  public setLevel(lvl: number): void {
+    this.level = Phaser.Math.Clamp(lvl, 1, MAX_BUILDING_LEVEL);
+    this.maxSleepers = (this.isLarge ? 6 : 3) + (this.level - 1) * 2;
+    this.applyLevelVisuals();
+  }
+
+  public upgrade(): boolean {
+    if (!this.isComplete() || this.level >= MAX_BUILDING_LEVEL) return false;
+    this.setLevel(this.level + 1);
+    this.playBuildBounce();
+    this.spawnBuildParticles();
+    return true;
+  }
+
+  private applyLevelVisuals(): void {
+    const scale = 1 + (this.level - 1) * 0.08;
+    this.sprite.setScale(scale);
+    this.upgradeTrim.clear();
+    if (this.level >= 2) {
+      const rx = this.isLarge ? 66 : 52;
+      const ry = this.isLarge ? 24 : 18;
+      this.upgradeTrim.lineStyle(3, this.level >= 3 ? 0xfacc15 : 0x94a3b8, 0.9);
+      this.upgradeTrim.strokeEllipse(0, 2, rx * 2, ry * 2);
+      this.levelBadge.setText('★'.repeat(this.level)).setVisible(true);
+    } else {
+      this.levelBadge.setVisible(false);
+    }
   }
 
   public getProgress(): number {

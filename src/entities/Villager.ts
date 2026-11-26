@@ -4,6 +4,7 @@ import {
   AncestorRecord,
   ARMOR_DEFS,
   ArmorType,
+  BASE_CARRY_CAPACITY,
   CarryVisualType,
   CombatTarget,
   ELDER_AGE,
@@ -31,6 +32,8 @@ import {
   VillagerSnapshot,
   VillagerState,
   VillagerStats,
+  VillagerTraitId,
+  VILLAGER_TRAIT_DEFS,
   WARRIOR_CLASS_LABELS_UK,
   WarriorClass,
   WEAPON_DEFS,
@@ -83,6 +86,8 @@ export interface VillagerCallbacks {
   findNearbyIdleVillager: (requester: Villager, maxRadius: number) => Villager | null;
   findAvailableSleepHut: (x: number, y: number) => Hut | null;
   findCompletedNursery: (x: number, y: number) => TribeBuilding | null;
+  findAvailableGym: (x: number, y: number) => TribeBuilding | null;
+  findNearbyFlowerSpot: (x: number, y: number) => { x: number; y: number } | null;
   findGathererTask: (
     hut: TribeBuilding,
     v: Villager
@@ -102,6 +107,7 @@ export interface VillagerCallbacks {
   getVillagers: () => Villager[];
   hasChief: () => boolean;
   hasTotem: () => boolean;
+  getChiefHutAuraLevel: (x: number, y: number) => number;
   onDepositResource: (type: ResourceType, amount: number, x: number, y: number) => void;
   onStationCycleComplete: (villager: Villager, building: TribeBuilding) => void;
   onGrewUp: (villager: Villager) => void;
@@ -124,8 +130,10 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
   public stats: VillagerStats = {
     health: 120,
     satiety: 90,
-    energy: 100
+    energy: 100,
+    mood: 84
   };
+  public readonly trait: VillagerTraitId;
   public maxHealth = 120;
   public isChild: boolean;
   public age: number;
@@ -273,7 +281,14 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
   private carrying: ResourceType | null = null;
   private carryVisual: CarryVisualType | null = null;
   private carryAmount = 0;
-  private carryCapacity = 5;
+  private carryCapacity = BASE_CARRY_CAPACITY;
+  private gymBonusHp = 0;
+  private gymBonusDamage = 0;
+  private trainedThisSeason = false;
+  private targetGym: TribeBuilding | null = null;
+  private gymTrainTimer = 0;
+  private flowerTimer = 0;
+  private lazyTimer = 0;
 
   private readonly speed = 104;
   private readonly strikeIntervalMs = 900;
@@ -315,6 +330,9 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     this.campfire = campfire;
     this.callbacks = callbacks;
     this.age = initialAge;
+    const traitPool: VillagerTraitId[] = ['hardworking', 'cheerful', 'romantic', 'lazy', 'brave'];
+    const traitSeed = id.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+    this.trait = traitPool[traitSeed % traitPool.length];
     this.lifeStage = this.computeLifeStage(initialAge);
     this.isChild = this.lifeStage === 'CHILD';
 
@@ -537,6 +555,7 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
 
   public onNewSeason(sharedSpouseStartMs?: number): void {
     this.birthsThisSeason = 0;
+    this.trainedThisSeason = false;
     this.freeTimeStartMs =
       sharedSpouseStartMs ??
       Phaser.Math.Between(35_000, SEASON_DURATION_MS - FREE_TIME_DURATION_MS - 15_000);
@@ -714,7 +733,7 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
         ? 20
         : 0;
     const prevMax = this.maxHealth;
-    this.maxHealth = 120 + healBonus + classBonus + armorBonus;
+    this.maxHealth = 120 + healBonus + classBonus + armorBonus + this.gymBonusHp;
     if (this.maxHealth > prevMax) {
       this.stats.health = Math.min(this.maxHealth, this.stats.health + (this.maxHealth - prevMax));
     } else {
@@ -1345,6 +1364,29 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     return STATE_LABELS_UK[this.state];
   }
 
+  public getCarryCapacity(): number {
+    const craftTier = this.callbacks.getTechLevels().craft ?? 0;
+    return this.carryCapacity + craftTier * 2;
+  }
+
+  public applyGymTraining(buildingLevel = 1): { hpGain: number; dmgGain: number } {
+    const hpCap = 60 + (buildingLevel - 1) * 20;
+    const dmgCap = 18 + (buildingLevel - 1) * 6;
+    const hpGain = this.gymBonusHp < hpCap ? Math.min(4, hpCap - this.gymBonusHp) : 0;
+    const dmgGain = this.gymBonusDamage < dmgCap ? Math.min(2, dmgCap - this.gymBonusDamage) : 0;
+    this.gymBonusHp += hpGain;
+    this.gymBonusDamage += dmgGain;
+    if (hpGain > 0) {
+      this.refreshMaxHealth();
+    }
+    this.stats.health = Math.min(this.maxHealth, this.stats.health + 6);
+    this.gainProfessionXp('warrior', 8);
+    if (this.scene && (hpGain > 0 || dmgGain > 0)) {
+      this.spawnSparkleBurst(0xf97316);
+    }
+    return { hpGain, dmgGain };
+  }
+
   public getSnapshot(): VillagerSnapshot {
     const hasWisdomBuff = this.hasWisdomAura();
     const hasChiefBuff = this.hasChiefAura();
@@ -1360,7 +1402,7 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
       maxHealth: this.maxHealth,
       carrying: this.carrying,
       carryAmount: this.carryAmount,
-      carryCapacity: this.carryCapacity,
+      carryCapacity: this.getCarryCapacity(),
       isChild: this.isChild,
       age: this.age,
       lifeStage: this.lifeStage,
@@ -1381,13 +1423,16 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
       activeProfessionLevel: prof ? this.getSkillLevel(prof) : 1,
       activeProfessionXpRatio: prof ? this.getSkillXpRatio(prof) : 0,
       assignedBuildingName: this.assignedBuilding ? this.assignedBuilding.nameUk : null,
-      isDying: this.isDying
+      isDying: this.isDying,
+      trait: this.trait,
+      traitLabel: `${VILLAGER_TRAIT_DEFS[this.trait].icon} ${VILLAGER_TRAIT_DEFS[this.trait].nameUk}`,
+      trainedThisSeason: this.trainedThisSeason
     };
   }
 
   public setChief(chief: boolean): void {
     this.isChief = chief;
-    this.carryCapacity = chief ? 7 : 5;
+    this.carryCapacity = chief ? BASE_CARRY_CAPACITY + 2 : BASE_CARRY_CAPACITY;
     this.crownSprite.setVisible(chief);
     this.chiefAura.setVisible(chief);
     if (chief && this.scene) {
@@ -1399,7 +1444,8 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
   public advanceAge(years: number): boolean {
     if (!this.scene || this.isDying) return false;
     const prevStage = this.lifeStage;
-    this.age += years;
+    const deltaAge = prevStage === 'CHILD' ? years + 1 : years;
+    this.age += deltaAge;
     const nextStage = this.computeLifeStage(this.age);
     this.lifeStage = nextStage;
     this.isChild = nextStage === 'CHILD';
@@ -1563,6 +1609,8 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     let sp = this.speed;
     if (this.lifeStage === 'ELDER') sp *= 0.7;
     if (this.isChief) sp *= 1.2;
+    const hutLvl = this.callbacks.getChiefHutAuraLevel(this.x, this.y);
+    if (hutLvl > 0) sp *= 1 + 0.08 + hutLvl * 0.04;
     return sp;
   }
 
@@ -1583,6 +1631,12 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     mult *= [1, 1.15, 1.35, 1.55][tech.craft] ?? 1;
     if (this.isChief) mult *= 1.4;
     else if (this.hasChiefAura()) mult *= 1.1;
+    const hutLvl = this.callbacks.getChiefHutAuraLevel(this.x, this.y);
+    if (hutLvl > 0) mult *= 1 + 0.12 + hutLvl * 0.05;
+    if (this.trait === 'hardworking') mult *= 1.12;
+    const moodVal = this.stats.mood ?? 80;
+    if (moodVal >= 80) mult *= 1.12;
+    else if (moodVal < 25) mult *= 0.8;
     if (this.hasWisdomAura()) mult *= 1.2;
     return mult;
   }
@@ -1741,6 +1795,10 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
   }
 
   private leaveHutIfOccupied(): void {
+    if (this.targetGym) {
+      this.targetGym.leaveTraining(this);
+      this.targetGym = null;
+    }
     if (this.sleepHut) {
       const door = this.sleepHut.getDoorPoint();
       this.sleepHut.leaveSleep(this);
@@ -1950,6 +2008,7 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
       this.stats.energy = Math.min(100, this.stats.energy + 20 * dt);
       this.stats.health = Math.min(this.maxHealth, this.stats.health + 8 * dt);
       this.stats.satiety = Math.max(0, this.stats.satiety - 0.35 * dt);
+      this.stats.mood = Math.min(100, (this.stats.mood ?? 80) + 3.2 * dt);
       return;
     }
 
@@ -1965,20 +2024,35 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     const hungerRate = (this.isChild ? 0.45 : working ? 1.15 : 0.72) * hungerMult;
     this.stats.satiety = Math.max(0, this.stats.satiety - hungerRate * dt);
 
+    let moodDelta = 0;
     if (working) {
       this.stats.energy = Math.max(0, this.stats.energy - 1.9 * dt);
-    } else if (this.state === 'WARMING') {
-      this.stats.energy = Math.min(100, this.stats.energy + 10.5 * dt);
+      moodDelta = this.trait === 'cheerful' ? -0.25 : this.trait === 'lazy' ? -0.85 : -0.5;
+    } else if (this.state === 'WARMING' || this.state === 'LAZY_RESTING') {
+      this.stats.energy = Math.min(100, this.stats.energy + (this.trait === 'lazy' ? 13 : 10.5) * dt);
+      moodDelta = 4.2;
     } else if (
       this.state === 'IDLE_WANDER' ||
       this.state === 'FREE_TIME' ||
       this.state === 'PATROLLING' ||
       this.state === 'SCRATCHING' ||
       this.state === 'CHATTING' ||
+      this.state === 'PICKING_FLOWERS' ||
+      this.state === 'TRAINING_AT_GYM' ||
       this.state === 'CHILD_PLAYING'
     ) {
       this.stats.energy = Math.min(100, this.stats.energy + 3.5 * dt);
+      moodDelta =
+        this.state === 'PICKING_FLOWERS' || this.state === 'CHATTING'
+          ? this.trait === 'romantic'
+            ? 6.5
+            : 4.5
+          : 2.8;
     }
+    if (this.stats.satiety < 25 || this.stats.energy < 20) {
+      moodDelta -= 1.4;
+    }
+    this.stats.mood = Phaser.Math.Clamp((this.stats.mood ?? 80) + moodDelta * dt, 0, 100);
 
     // Winter cold drain when far from campfire
     if (this.callbacks.getSeason() === 'WINTER') {
@@ -2129,6 +2203,18 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
         break;
       case 'FREE_TIME':
         this.handleFreeTime(delta, dt);
+        break;
+      case 'MOVING_TO_GYM':
+        this.handleMovingToGym(dt);
+        break;
+      case 'TRAINING_AT_GYM':
+        this.handleTrainingAtGym(delta);
+        break;
+      case 'PICKING_FLOWERS':
+        this.handlePickingFlowers(delta, dt);
+        break;
+      case 'LAZY_RESTING':
+        this.handleLazyResting(delta);
         break;
       case 'WARMING':
         this.handleWarming(delta, dt);
@@ -2536,6 +2622,17 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
       return;
     }
 
+    if (!this.trainedThisSeason && !this.isChild && !this.targetGym) {
+      const gym = this.callbacks.findAvailableGym(this.x, this.y);
+      if (gym && gym.enterTraining(this)) {
+        this.targetGym = gym;
+        this.moveTarget = null;
+        this.state = 'MOVING_TO_GYM';
+        this.showTemporaryBubble('🏋️', 1800);
+        return;
+      }
+    }
+
     if (this.moveTarget) {
       const arrived = this.moveToward(this.moveTarget.x, this.moveTarget.y, dt, 10, 0.72);
       if (arrived) {
@@ -2547,8 +2644,18 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
       this.resetPose();
       this.freeTimeWaitTimer -= delta;
       if (this.freeTimeWaitTimer <= 0) {
+        const flowerChance = this.trait === 'romantic' ? 50 : 28;
+        if (Phaser.Math.Between(1, 100) <= flowerChance) {
+          const spot = this.callbacks.findNearbyFlowerSpot(this.x, this.y);
+          if (spot) {
+            this.moveTarget = new Phaser.Math.Vector2(spot.x, spot.y);
+            this.flowerTimer = Phaser.Math.Between(3400, 4800);
+            this.state = 'PICKING_FLOWERS';
+            return;
+          }
+        }
         const partner = this.callbacks.findNearbyIdleVillager(this, 260);
-        if (partner && Phaser.Math.Between(1, 100) <= 45) {
+        if (partner && Phaser.Math.Between(1, 100) <= 48) {
           const midX = (this.x + partner.x) / 2;
           const midY = (this.y + partner.y) / 2;
           const angle = Phaser.Math.Angle.Between(midX, midY, this.x, this.y);
@@ -2566,8 +2673,118 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     }
   }
 
+  private handleMovingToGym(dt: number): void {
+    this.clearProgressBar();
+    if (!this.targetGym || !this.targetGym.scene) {
+      this.targetGym = null;
+      this.state = this.isFreeTime ? 'FREE_TIME' : 'IDLE_WANDER';
+      return;
+    }
+    const spot = this.targetGym.getTrainSpotFor(this);
+    const arrived = this.moveToward(spot.x, spot.y, dt, 14, 1, this.targetGym);
+    if (arrived) {
+      this.resetPose();
+      this.gymTrainTimer = 0;
+      this.state = 'TRAINING_AT_GYM';
+      this.showBubble('💪');
+    }
+  }
+
+  private handleTrainingAtGym(delta: number): void {
+    if (!this.targetGym || !this.targetGym.scene) {
+      this.clearProgressBar();
+      this.targetGym = null;
+      this.state = this.isFreeTime ? 'FREE_TIME' : 'IDLE_WANDER';
+      return;
+    }
+    const trainDuration = 4000;
+    this.gymTrainTimer += delta;
+    const p = Phaser.Math.Clamp(this.gymTrainTimer / trainDuration, 0, 1);
+    const wave = Math.sin(p * Math.PI * 8);
+    this.frontArmGroup.setAngle(-48 + wave * 32);
+    this.backArm.setAngle(-48 - wave * 32);
+    this.rig.y = -Math.abs(wave) * 3;
+    this.drawProgressBar(p, 0xf97316);
+
+    if (this.gymTrainTimer >= trainDuration) {
+      this.clearProgressBar();
+      this.resetPose();
+      this.hideBubble();
+      const gym = this.targetGym;
+      this.targetGym = null;
+      gym.leaveTraining(this);
+      this.trainedThisSeason = true;
+      const gain = gym.getLevel ? this.applyGymTraining(gym.getLevel()) : this.applyGymTraining(1);
+      this.stats.mood = Math.min(100, (this.stats.mood ?? 80) + 12);
+      if (gain.hpGain > 0 || gain.dmgGain > 0) {
+        this.showTemporaryBubble(`💪+${gain.hpGain}HP`, 2200);
+      }
+      if (this.isFreeTime) {
+        this.state = 'FREE_TIME';
+        this.freeTimeWaitTimer = 900;
+      } else {
+        this.exitFreeTimeAndResume();
+      }
+    }
+  }
+
+  private handlePickingFlowers(delta: number, dt: number): void {
+    this.clearProgressBar();
+    if (this.moveTarget) {
+      const arrived = this.moveToward(this.moveTarget.x, this.moveTarget.y, dt, 12, 0.72);
+      if (arrived) {
+        this.moveTarget = null;
+        this.resetPose();
+        this.showBubble(this.trait === 'romantic' ? '💐' : '🌸');
+      }
+      return;
+    }
+    this.flowerTimer -= delta;
+    this.rig.y = Math.sin(this.flowerTimer * 0.008) * 1.5;
+    if (this.flowerTimer <= 0) {
+      this.resetPose();
+      this.hideBubble();
+      this.stats.mood = Math.min(100, (this.stats.mood ?? 80) + 14);
+      this.state = this.isFreeTime ? 'FREE_TIME' : 'IDLE_WANDER';
+      this.freeTimeWaitTimer = Phaser.Math.Between(1200, 2400);
+    }
+  }
+
+  private handleLazyResting(delta: number): void {
+    this.clearProgressBar();
+    this.applyView('front');
+    this.rig.y = 6;
+    this.lazyTimer -= delta;
+    if (this.lazyTimer <= 0) {
+      this.resetPose();
+      this.hideBubble();
+      this.stats.mood = Math.min(100, (this.stats.mood ?? 50) + 22);
+      this.state = this.isFreeTime ? 'FREE_TIME' : 'IDLE_WANDER';
+      this.idleWaitTimer = 900;
+    }
+  }
+
   private pickAutonomousIdleActivity(): void {
+    const moodVal = this.stats.mood ?? 80;
+    if (!this.isChild && (moodVal < 25 || (this.trait === 'lazy' && moodVal < 45))) {
+      this.state = 'LAZY_RESTING';
+      this.lazyTimer = Phaser.Math.Between(3600, 5200);
+      this.moveTarget = null;
+      this.showBubble(moodVal < 25 ? '😒' : '🥱');
+      return;
+    }
+
     const roll = Phaser.Math.Between(1, 100);
+
+    if (roll <= (this.trait === 'romantic' ? 35 : 20)) {
+      const spot = this.callbacks.findNearbyFlowerSpot(this.x, this.y);
+      if (spot) {
+        this.moveTarget = new Phaser.Math.Vector2(spot.x, spot.y);
+        this.flowerTimer = Phaser.Math.Between(3200, 4600);
+        this.state = 'PICKING_FLOWERS';
+        return;
+      }
+    }
 
     if (roll <= 28) {
       const partner = this.callbacks.findNearbyIdleVillager(this, 240);
@@ -3003,9 +3220,10 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     this.torso.setAngle(armAngle * 0.14);
     this.rig.y = -Math.abs(Math.sin(swingP * Math.PI)) * 2;
 
+    const cap = this.getCarryCapacity();
     const totalProgress = Phaser.Math.Clamp(
       (this.carryAmount * this.strikeIntervalMs + this.actionTimer) /
-        (this.carryCapacity * this.strikeIntervalMs),
+        (cap * this.strikeIntervalMs),
       0,
       1
     );
@@ -3032,7 +3250,7 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
         }
       }
 
-      if (this.carryAmount >= this.carryCapacity || this.targetNode.isDepleted()) {
+      if (this.carryAmount >= this.getCarryCapacity() || this.targetNode.isDepleted()) {
         this.clearProgressBar();
         this.resetPose();
         this.state = 'RETURNING';
@@ -3117,9 +3335,10 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
       this.rig.y = -Math.abs(Math.sin(swingP * Math.PI)) * 1.8;
     }
 
+    const cap = this.getCarryCapacity();
     const totalProgress = Phaser.Math.Clamp(
       (this.carryAmount * this.fishIntervalMs + this.actionTimer) /
-        (this.carryCapacity * this.fishIntervalMs),
+        (cap * this.fishIntervalMs),
       0,
       1
     );
@@ -3138,7 +3357,7 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
       this.deeds.fishCaught += 1;
       this.gainProfessionXp('fisher', 4);
 
-      if (this.carryAmount >= this.carryCapacity) {
+      if (this.carryAmount >= this.getCarryCapacity()) {
         this.clearProgressBar();
         this.resetPose();
         this.state = 'RETURNING';
@@ -3253,7 +3472,7 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
         } else {
           this.carrying = 'food';
           this.carryVisual = 'meat';
-          this.carryAmount = Math.min(this.carryCapacity, animal.meatYield);
+          this.carryAmount = Math.min(this.getCarryCapacity(), animal.meatYield);
           this.state = 'RETURNING';
           this.updateCarryVisual();
         }
@@ -3354,8 +3573,9 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     this.torso.setAngle(8);
     this.rig.y = 2;
 
+    const cap = this.getCarryCapacity();
     const totalP = Phaser.Math.Clamp(
-      (this.carryAmount * 650 + this.actionTimer) / (this.carryCapacity * 650),
+      (this.carryAmount * 650 + this.actionTimer) / (cap * 650),
       0,
       1
     );
@@ -3378,7 +3598,7 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
       }
 
       if (
-        this.carryAmount >= this.carryCapacity ||
+        this.carryAmount >= this.getCarryCapacity() ||
         this.targetCarcass.isEmpty() ||
         this.targetCarcass.getAmount(activeType) <= 0
       ) {
@@ -3623,11 +3843,16 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     const tech = this.callbacks.getTechLevels();
     const weaponMult = [1, 1.2, 1.45, 1.75][tech.weapons] ?? 1;
     const warriorBonus = this.warriorClass ? 1 + (this.getSkillLevel('warrior') - 1) * 0.14 : 1;
+    const hutLvl = this.callbacks.getChiefHutAuraLevel(this.x, this.y);
+    const chiefHutMult = hutLvl > 0 ? 1 + 0.1 + hutLvl * 0.05 : 1;
+    const braveMult = this.trait === 'brave' ? 1.15 : 1;
 
     if (this.equippedWeapon) {
       const def = WEAPON_DEFS[this.equippedWeapon];
       return {
-        damage: Math.round(def.damage * weaponMult * warriorBonus),
+        damage: Math.round(
+          (def.damage + this.gymBonusDamage) * weaponMult * warriorBonus * chiefHutMult * braveMult
+        ),
         range: def.range,
         cooldownMs: def.cooldownMs,
         ranged: def.ranged
@@ -3635,7 +3860,9 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
     }
 
     return {
-      damage: Math.round((this.hasCraftedTools ? 11 : 7) * weaponMult),
+      damage: Math.round(
+        ((this.hasCraftedTools ? 11 : 7) + this.gymBonusDamage) * weaponMult * chiefHutMult * braveMult
+      ),
       range: 46,
       cooldownMs: 780,
       ranged: false
@@ -4572,6 +4799,14 @@ export class Villager extends Phaser.GameObjects.Container implements CombatTarg
         return '🥩';
       case 'CLEARING_STUMP':
         return '🪓';
+      case 'MOVING_TO_GYM':
+        return '🏋️';
+      case 'TRAINING_AT_GYM':
+        return '💪';
+      case 'PICKING_FLOWERS':
+        return '🌸';
+      case 'LAZY_RESTING':
+        return '🥱';
       case 'BUILDING':
       case 'MOVING_TO_BUILD':
         return '🔨';

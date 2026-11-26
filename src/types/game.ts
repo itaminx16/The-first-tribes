@@ -302,6 +302,9 @@ export type BuildingType =
   | 'smokehouse'
   | 'palisade'
   | 'bridge'
+  | 'chief_hut'
+  | 'training_ground'
+  | 'animal_pen'
   | 'burial_mound';
 
 export type BuildingCategory = 'living' | 'economy' | 'military' | 'spiritual';
@@ -326,18 +329,18 @@ export type TechState = Record<TechBranchId, number>;
 
 export const MAX_STORAGE = 100;
 export const GRANARY_STORAGE_BONUS = 80;
-export const BASE_POP_CAP = 3;
+export const BASE_POP_CAP = 4;
 export const HUT_POP_BONUS = 4;
 export const LARGE_HUT_POP_BONUS = 8;
 export const BARRACKS_WARRIOR_BONUS = 5;
-export const HUT_COST = { wood: 20, stone: 10 } as const;
+export const HUT_COST = { wood: 12, stone: 6 } as const;
 export const BREED_MIN_FOOD = 15;
-export const BREED_DURATION_MS = 10_000;
-export const SHAMAN_CONVERT_DURATION_MS = 20_000;
+export const BREED_DURATION_MS = 8_000;
+export const SHAMAN_CONVERT_DURATION_MS = 16_000;
 
-export const SEASON_DURATION_MS = 10 * 60 * 1000; // 10 minutes per season
-export const FREE_TIME_DURATION_MS = 2 * 60 * 1000; // 2 minutes personal free time per season
-export const YEARS_PER_SEASON_CHANGE = 2;
+export const SEASON_DURATION_MS = 210_000; // 3.5 minutes per season
+export const FREE_TIME_DURATION_MS = 45_000; // 45s personal free time per season
+export const YEARS_PER_SEASON_CHANGE = 3;
 export const ADULT_AGE = 14;
 export const ELDER_AGE = 60;
 export const MIN_NATURAL_DEATH_AGE = 62;
@@ -354,7 +357,16 @@ export const CARCASS_YIELD = {
   hide: 5
 } as const;
 
-export const MAX_PREDATORS = 3;
+export const MAMMOTH_CARCASS_YIELD = {
+  food: 60,
+  bone: 35,
+  hide: 25
+} as const;
+
+export const MAX_PREDATORS = 5;
+export const MAX_BUILDING_LEVEL = 3;
+
+export const BASE_CARRY_CAPACITY = 9;
 
 export const RIVAL_RAID_THRESHOLDS = [
   { pop: 100, squad: 20 },
@@ -528,9 +540,9 @@ export const TECH_TREE: Record<
     titleUk: 'Ремесло',
     icon: '⚒️',
     tiers: [
-      { nameUk: 'Зручні руківʼя', descUk: '+15% швидкості праці й кузні', cost: 20 },
-      { nameUk: 'Гірниче вміння', descUk: '+35% швидкості праці', cost: 45 },
-      { nameUk: 'Майстерність предків', descUk: '+55% швидкості праці', cost: 80 }
+      { nameUk: 'Шкіряні сумки', descUk: '+15% швидкості праці, +2 рюкзак', cost: 20 },
+      { nameUk: 'Гірниче вміння', descUk: '+35% швидкості праці, +4 рюкзак', cost: 45 },
+      { nameUk: 'Майстерність предків', descUk: '+55% швидкості праці, +6 рюкзак', cost: 80 }
     ]
   },
   healing: {
@@ -574,32 +586,32 @@ export const BUILDING_DEFS: Record<BuildingType, BuildingDef> = {
     category: 'living',
     nameUk: 'Мала хатина',
     shortUk: 'Хатина',
-    wood: 20,
-    stone: 10,
+    wood: 12,
+    stone: 6,
     profession: null,
     maxWorkers: 0,
-    descUk: '+4 населення, сон та створення сімей (покачується)'
+    descUk: '+4 населення, сон та створення сімей (покращується до 3 р.)'
   },
   large_hut: {
     type: 'large_hut',
     category: 'living',
     nameUk: 'Велика хатина',
     shortUk: 'Вел.хата',
-    wood: 40,
-    stone: 20,
-    hide: 8,
+    wood: 34,
+    stone: 16,
+    hide: 6,
     profession: null,
     maxWorkers: 0,
-    descUk: '+8 населення, простора оселя для 6 жителів та сімей'
+    descUk: '+8 населення, простора оселя для сімей (покращується до 3 р.)'
   },
   nursery: {
     type: 'nursery',
     category: 'living',
     nameUk: 'Ясла',
     shortUk: 'Ясла',
-    wood: 25,
+    wood: 22,
     stone: 10,
-    hide: 5,
+    hide: 4,
     profession: null,
     maxWorkers: 0,
     descUk: 'Діти самостійно приходять сюди і ростуть у безпеці до 14 років'
@@ -609,8 +621,8 @@ export const BUILDING_DEFS: Record<BuildingType, BuildingDef> = {
     category: 'economy',
     nameUk: 'Хатина збирача',
     shortUk: 'Збирачі',
-    wood: 25,
-    stone: 15,
+    wood: 15,
+    stone: 8,
     profession: 'gatherer',
     maxWorkers: 3,
     descUk: 'До 3 збирачів: самі прибирають пеньки й кущі та збирають ресурси поруч'
@@ -620,19 +632,19 @@ export const BUILDING_DEFS: Record<BuildingType, BuildingDef> = {
     category: 'economy',
     nameUk: 'Комора',
     shortUk: 'Комора',
-    wood: 30,
-    stone: 15,
+    wood: 18,
+    stone: 10,
     profession: null,
     maxWorkers: 0,
-    descUk: '+80 до ліміту складу. Зберігає всі ресурси племені без працівників.'
+    descUk: '+80 складу за рівень (до 3 р.). Зберігає всі ресурси без працівників.'
   },
   workshop: {
     type: 'workshop',
     category: 'economy',
     nameUk: 'Майстерня',
     shortUk: 'Майстер.',
-    wood: 25,
-    stone: 20,
+    wood: 15,
+    stone: 10,
     profession: 'crafter',
     maxWorkers: 1,
     descUk: 'Виготовляє інструменти для кожного жителя (+5 у запас) з дерева й каменю.'
@@ -718,6 +730,40 @@ export const BUILDING_DEFS: Record<BuildingType, BuildingDef> = {
     profession: null,
     maxWorkers: 0,
     descUk: 'Деревʼяний міст через річку — жителі й воїни вільно переходять по ньому'
+  },
+  chief_hut: {
+    type: 'chief_hut',
+    category: 'spiritual',
+    nameUk: 'Хатина Вождя',
+    shortUk: 'Вождь',
+    wood: 24,
+    stone: 14,
+    hide: 5,
+    profession: null,
+    maxWorkers: 0,
+    descUk: 'Аура +18% швидкості й +15% сили для племені поруч (покращується до 3 р.)'
+  },
+  training_ground: {
+    type: 'training_ground',
+    category: 'military',
+    nameUk: 'Спортзал',
+    shortUk: 'Спортзал',
+    wood: 18,
+    stone: 12,
+    profession: null,
+    maxWorkers: 0,
+    descUk: 'До 3 жителів самі приходять у вільний час тренуватися (1 раз/сезон: +HP і сила)'
+  },
+  animal_pen: {
+    type: 'animal_pen',
+    category: 'economy',
+    nameUk: 'Загін звірів',
+    shortUk: 'Загін',
+    wood: 22,
+    stone: 10,
+    profession: 'keeper',
+    maxWorkers: 1,
+    descUk: 'Приручені звірі стабільно приносять мʼясо (+4) та шкіру (+2), навіть узимку'
   },
   burial_mound: {
     type: 'burial_mound',
@@ -808,6 +854,10 @@ export type VillagerState =
   | 'MOVING_TO_CARCASS'
   | 'MOVING_TO_BUILD'
   | 'MOVING_TO_WORK'
+  | 'MOVING_TO_GYM'
+  | 'TRAINING_AT_GYM'
+  | 'PICKING_FLOWERS'
+  | 'LAZY_RESTING'
   | 'MOVING_TO_NURSERY'
   | 'IN_NURSERY'
   | 'CLEARING_STUMP'
@@ -850,10 +900,24 @@ export interface TribeResources {
   knowledge: number;
 }
 
+export type VillagerTraitId = 'hardworking' | 'cheerful' | 'romantic' | 'lazy' | 'brave';
+
+export const VILLAGER_TRAIT_DEFS: Record<
+  VillagerTraitId,
+  { nameUk: string; icon: string; descUk: string }
+> = {
+  hardworking: { nameUk: 'Трудівник', icon: '⚒️', descUk: '+12% швидкості праці' },
+  cheerful: { nameUk: 'Веселун', icon: '😄', descUk: 'Повільніше втрачає настрій' },
+  romantic: { nameUk: 'Романтик', icon: '🌸', descUk: 'Любить квіточки й дарує настрій поруч' },
+  lazy: { nameUk: 'Лінивець', icon: '🥱', descUk: 'Частіше відпочиває, але швидше відновлює сили' },
+  brave: { nameUk: 'Хоробрий', icon: '🦁', descUk: '+15% бойового духу та урону' }
+};
+
 export interface VillagerStats {
   health: number;
   satiety: number;
   energy: number;
+  mood?: number;
 }
 
 export interface VillagerDeeds {
@@ -929,6 +993,109 @@ export interface BuildingSnapshot {
   toolsTarget?: number;
   garrisonedWarriorName?: string | null;
   requiresWarrior?: boolean;
+  level?: number;
+  maxLevel?: number;
+  upgradeCost?: { wood: number; stone: number; bone?: number; hide?: number } | null;
+  upgradeDescUk?: string;
+}
+
+export interface BuildingUnlockInfo {
+  unlocked: boolean;
+  stage: 1 | 2 | 3 | 4;
+  reasonUk?: string;
+}
+
+export function getBuildingUnlockInfo(
+  type: BuildingType,
+  completedTypes: ReadonlySet<BuildingType>,
+  popCount: number,
+  hasChief: boolean,
+  isSandbox: boolean
+): BuildingUnlockInfo {
+  const stageMap: Record<BuildingType, 1 | 2 | 3 | 4> = {
+    hut: 1,
+    gatherer_hut: 1,
+    granary: 1,
+    workshop: 1,
+    nursery: 2,
+    smokehouse: 2,
+    totem: 2,
+    large_hut: 2,
+    animal_pen: 2,
+    palisade: 3,
+    bridge: 3,
+    armory: 3,
+    barracks: 3,
+    training_ground: 3,
+    watchtower: 4,
+    burial_mound: 4,
+    chief_hut: 4
+  };
+  const stage = stageMap[type];
+  if (isSandbox || stage === 1) {
+    return { unlocked: true, stage };
+  }
+  const hasHut = completedTypes.has('hut') || completedTypes.has('large_hut');
+  const hasWorkshop = completedTypes.has('workshop');
+  if (stage === 2) {
+    const ok = hasHut && hasWorkshop;
+    return ok
+      ? { unlocked: true, stage }
+      : { unlocked: false, stage, reasonUk: 'Потрібно: Мала хатина + Майстерня' };
+  }
+  const hasTotem = completedTypes.has('totem');
+  if (stage === 3) {
+    const ok = hasTotem || popCount >= 6;
+    return ok
+      ? { unlocked: true, stage }
+      : { unlocked: false, stage, reasonUk: 'Потрібно: Тотем або 6+ жителів' };
+  }
+  if (type === 'watchtower') {
+    const ok = completedTypes.has('barracks');
+    return ok
+      ? { unlocked: true, stage }
+      : { unlocked: false, stage, reasonUk: 'Потрібно: Казарма' };
+  }
+  if (type === 'chief_hut') {
+    const ok = hasChief || completedTypes.has('barracks');
+    return ok
+      ? { unlocked: true, stage }
+      : { unlocked: false, stage, reasonUk: 'Потрібно: обрати Вождя або Казарма' };
+  }
+  const ok = completedTypes.has('barracks') || completedTypes.has('armory') || hasTotem;
+  return ok
+    ? { unlocked: true, stage }
+    : { unlocked: false, stage, reasonUk: 'Потрібно: Тотем або Казарма' };
+}
+
+export const UPGRADEABLE_BUILDINGS: ReadonlySet<BuildingType> = new Set([
+  'hut',
+  'large_hut',
+  'watchtower',
+  'granary',
+  'chief_hut',
+  'animal_pen',
+  'training_ground',
+  'workshop',
+  'barracks'
+]);
+
+export function getBuildingUpgradeCost(
+  type: BuildingType,
+  currentLevel: number
+): { wood: number; stone: number; bone?: number; hide?: number } | null {
+  if (!UPGRADEABLE_BUILDINGS.has(type) || currentLevel >= MAX_BUILDING_LEVEL) {
+    return null;
+  }
+  const def = BUILDING_DEFS[type];
+  const mult = currentLevel === 1 ? 1.25 : 1.85;
+  const cost: { wood: number; stone: number; bone?: number; hide?: number } = {
+    wood: Math.max(10, Math.round(def.wood * mult)),
+    stone: Math.max(6, Math.round(def.stone * mult))
+  };
+  if (def.bone) cost.bone = Math.max(3, Math.round(def.bone * mult));
+  if (def.hide) cost.hide = Math.max(3, Math.round(def.hide * mult));
+  return cost;
 }
 
 export interface VillagerSnapshot {
@@ -964,6 +1131,9 @@ export interface VillagerSnapshot {
   activeProfessionXpRatio: number;
   assignedBuildingName: string | null;
   isDying: boolean;
+  trait?: VillagerTraitId;
+  traitLabel?: string;
+  trainedThisSeason?: boolean;
 }
 
 export interface SelectionSummary {
@@ -1046,6 +1216,10 @@ export const STATE_LABELS_UK: Record<VillagerState, string> = {
   MOVING_TO_CARCASS: 'Іде до туші звіра',
   MOVING_TO_BUILD: 'Іде на будівництво',
   MOVING_TO_WORK: 'Іде на роботу',
+  MOVING_TO_GYM: 'Іде до Спортзалу 🏋️',
+  TRAINING_AT_GYM: 'Тренується у Спортзалі 💪',
+  PICKING_FLOWERS: 'Збирає квіточки 🌸',
+  LAZY_RESTING: 'Лінується / відпочиває 🥱',
   MOVING_TO_NURSERY: 'Біжить у ясла',
   IN_NURSERY: 'У яслах (під наглядом)',
   CLEARING_STUMP: 'Корчує пеньок / кущ',

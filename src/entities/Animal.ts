@@ -2,7 +2,7 @@ import Phaser from 'phaser';
 import { ObstacleCircle } from '../types/game';
 import { CURSORS } from '../utils/Cursors';
 
-export type AnimalSpecies = 'boar' | 'deer';
+export type AnimalSpecies = 'boar' | 'deer' | 'mammoth';
 
 export class Animal extends Phaser.GameObjects.Container {
   public readonly species: AnimalSpecies;
@@ -22,6 +22,7 @@ export class Animal extends Phaser.GameObjects.Container {
 
   private getObstacles: () => ObstacleCircle[];
   private onKilled?: (animal: Animal) => void;
+  private onCounterAttack?: (animal: Animal, attackerX: number, attackerY: number) => void;
   private worldW: number;
   private worldH: number;
   private homeX: number;
@@ -31,6 +32,7 @@ export class Animal extends Phaser.GameObjects.Container {
   private fleeTarget: Phaser.Math.Vector2 | null = null;
   private waitTimer = Phaser.Math.Between(1200, 3200);
   private walkPhase = Phaser.Math.FloatBetween(0, Math.PI * 2);
+  private counterCooldownMs = 0;
   private alive = true;
 
   constructor(
@@ -41,46 +43,63 @@ export class Animal extends Phaser.GameObjects.Container {
     worldW: number,
     worldH: number,
     getObstacles: () => ObstacleCircle[],
-    onKilled?: (animal: Animal) => void
+    onKilled?: (animal: Animal) => void,
+    onCounterAttack?: (animal: Animal, attackerX: number, attackerY: number) => void
   ) {
     super(scene, x, y);
     this.species = species;
-    this.nameUk = species === 'boar' ? 'Дикий кабан' : 'Лісовий олень';
-    this.maxHp = species === 'boar' ? 45 : 35;
+    this.nameUk =
+      species === 'mammoth' ? 'Могутній мамонт' : species === 'boar' ? 'Дикий кабан' : 'Лісовий олень';
+    this.maxHp = species === 'mammoth' ? 260 : species === 'boar' ? 45 : 35;
     this.hp = this.maxHp;
-    this.meatYield = species === 'boar' ? 15 : 15;
+    this.meatYield = species === 'mammoth' ? 55 : 15;
     this.worldW = worldW;
     this.worldH = worldH;
     this.homeX = x;
     this.homeY = y;
     this.getObstacles = getObstacles;
     this.onKilled = onKilled;
+    this.onCounterAttack = onCounterAttack;
 
-    this.hoverRing = scene.add.ellipse(0, 4, 64, 28, 0xef4444, 0.16);
+    const isMammoth = species === 'mammoth';
+    this.hoverRing = scene.add.ellipse(0, 4, isMammoth ? 108 : 64, isMammoth ? 46 : 28, 0xef4444, 0.16);
     this.hoverRing.setStrokeStyle(2.2, 0xfca5a5, 0.9);
     this.hoverRing.setVisible(false);
 
-    this.shadow = scene.add.ellipse(0, 5, species === 'boar' ? 44 : 46, 16, 0x162612, 0.3);
+    this.shadow = scene.add.ellipse(
+      0,
+      5,
+      isMammoth ? 84 : species === 'boar' ? 44 : 46,
+      isMammoth ? 28 : 16,
+      0x162612,
+      0.32
+    );
 
     this.rig = scene.add.container(0, 0);
     const legKey = `animal-${species}-leg`;
     const bodyKey = `animal-${species}-body`;
 
-    this.backLeg = scene.add.image(-12, -10, legKey).setOrigin(0.5, 0.15).setScale(0.75);
-    this.frontLeg = scene.add.image(11, -10, legKey).setOrigin(0.5, 0.15).setScale(0.75);
+    this.backLeg = scene.add
+      .image(isMammoth ? -22 : -12, isMammoth ? -16 : -10, legKey)
+      .setOrigin(0.5, 0.15)
+      .setScale(isMammoth ? 1.02 : 0.75);
+    this.frontLeg = scene.add
+      .image(isMammoth ? 20 : 11, isMammoth ? -16 : -10, legKey)
+      .setOrigin(0.5, 0.15)
+      .setScale(isMammoth ? 1.02 : 0.75);
     this.bodySprite = scene.add
-      .image(0, species === 'boar' ? -16 : -21, bodyKey)
-      .setScale(0.62);
+      .image(0, isMammoth ? -36 : species === 'boar' ? -16 : -21, bodyKey)
+      .setScale(isMammoth ? 0.88 : 0.62);
     this.rig.add([this.backLeg, this.bodySprite, this.frontLeg]);
 
     this.hpBg = scene.add.graphics();
     this.hpFill = scene.add.graphics();
 
     this.add([this.hoverRing, this.shadow, this.rig, this.hpBg, this.hpFill]);
-    this.setSize(68, 56);
+    this.setSize(isMammoth ? 116 : 68, isMammoth ? 96 : 56);
     this.setDepth(y);
 
-    const hitCircle = new Phaser.Geom.Circle(0, -16, 36);
+    const hitCircle = new Phaser.Geom.Circle(0, isMammoth ? -28 : -16, isMammoth ? 52 : 36);
     this.setInteractive(hitCircle, Phaser.Geom.Circle.Contains);
     if (this.input) {
       this.input.cursor = CURSORS.hunt;
@@ -137,6 +156,20 @@ export class Animal extends Phaser.GameObjects.Container {
       return true;
     }
 
+    if (this.species === 'mammoth') {
+      // Mammoth stands its ground & tusk-swings back!
+      if (this.counterCooldownMs <= 0) {
+        this.counterCooldownMs = 1500;
+        this.onCounterAttack?.(this, attackerX, attackerY);
+      }
+      const angle = Phaser.Math.Angle.Between(this.x, this.y, attackerX, attackerY);
+      const fx = Phaser.Math.Clamp(this.x + Math.cos(angle) * 28, 95, this.worldW - 95);
+      const fy = Phaser.Math.Clamp(this.y + Math.sin(angle) * 28, 105, this.worldH - 95);
+      this.fleeTarget = new Phaser.Math.Vector2(fx, fy);
+      this.walkTarget = null;
+      return false;
+    }
+
     // Flee briskly away from hunter while staying catchable in pursuit
     const angle = Phaser.Math.Angle.Between(attackerX, attackerY, this.x, this.y);
     const fleeDist = this.species === 'deer' ? 195 : 165;
@@ -149,6 +182,7 @@ export class Animal extends Phaser.GameObjects.Container {
 
   public update(delta: number): void {
     if (!this.alive || !this.scene) return;
+    this.counterCooldownMs = Math.max(0, this.counterCooldownMs - delta);
     const dt = delta / 1000;
     const target = this.fleeTarget ?? this.walkTarget;
 
@@ -166,10 +200,14 @@ export class Animal extends Phaser.GameObjects.Container {
         const speed = isFleeing
           ? this.species === 'deer'
             ? 96
-            : 84
+            : this.species === 'mammoth'
+              ? 68
+              : 84
           : this.species === 'deer'
             ? 54
-            : 44;
+            : this.species === 'mammoth'
+              ? 36
+              : 44;
         const step = Math.min(dist, speed * dt);
         let nx = this.x + (dx / dist) * step;
         let ny = this.y + (dy / dist) * step;
